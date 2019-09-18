@@ -60,8 +60,7 @@ class SamplerPads(Module):
 class ZotinoPads(Module):
     def __init__(self, platform, eem):
 
-        self.sdi = Signal() # should this come to dac_ser from class constructor in the form of PADS?
-        self.ldac = Signal(reset = 1)
+        self.sdi = Signal()
         self.busy = Signal(reset = 1)
         self.syncr = Signal(reset = 1)
         self.rst = Signal(reset = 1)
@@ -79,9 +78,7 @@ class ZotinoPads(Module):
                 DifferentialOutput(self.ldac, ldacn.p, ldacn.n),
                 DifferentialOutput(self.sdi, spip.mosi, spin.mosi),
                 DifferentialOutput(self.sclk, spip.clk, spin.clk),
-                DifferentialOutput(self.syncr, clrn.p, clrn.n),
-                DifferentialOutput(self.sclk, spip.clk, spin.clk)
-                # from where should I take sclk? Is it somewhere in higher level of abstraction ???
+                DifferentialOutput(self.syncr, spip.cs_n, spin.cs_n),
 
                 DifferentialInput(busy.p, busy.n, self.busy),
         ]
