@@ -1,0 +1,6 @@
+__init__.py
+__pycache__/
+*.v
+*.vcd
+pid.py
+testing/test_iir.py
