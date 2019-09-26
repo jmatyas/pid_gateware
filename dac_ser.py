@@ -6,11 +6,14 @@ DACParams = namedtuple("DACParams", [
     "t_data",       # amount of clk cycles needed for data to be transmitted succesfully
     "t_ldaclow",    # amount of clk cycles needed for DAC to react on ldac driven low (minimum)
     "t_sync_ldac",  # amount of clk cylces between rising edge of sync and falling edge of ldac (minimum)
+    "channels",
 ])
 
 class DAC(Module):
     def __init__(self, pads, ch):
-        
+        self.profile = [Signal(32 + 16 + 16, reset_less=True)
+            for i in range(4)]
+
         self.data = Signal(16)      # 16-bit-wide data to be transferred to DAC
         self.dav = Signal()         # if dav (data valid) is high, data signal is ready to be read
         self.start = Signal()       # triggers outputting data on dac
@@ -35,6 +38,8 @@ class DAC(Module):
         
         ###
         
+        self.comb += self.data.eq(self.profile[0][:16])
+
         # new clock domain
         self.comb += clk_tick.eq(clk_counter == 0)
         self.sync += [
