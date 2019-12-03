@@ -35,7 +35,7 @@ class Servo(Module):
             If(self.dac.ready,
                 active[2].eq(0)
             ),
-            If(self.dac.start & self.dac.ready,
+            If(self.dac.start & ~self.dac.ready,
                 active[2].eq(1),
                 active[1].eq(0)
             ),

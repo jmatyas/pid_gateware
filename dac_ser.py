@@ -38,7 +38,7 @@ class DAC(Module):
         
         ###
         
-        self.comb += self.data.eq(self.profile[0][:16])
+        self.comb += self.data.eq(Cat(self.profile[0][50:], 00))
 
         # new clock domain
         self.comb += clk_tick.eq(clk_counter == 0)
@@ -68,7 +68,7 @@ class DAC(Module):
 
         fsm.act ("IDLE",
             self.ready.eq(1),
-                If((self.start & self.dav), 
+                If((self.start), # & self.dav), 
                     count_load.eq(24*4 - 1),                                # load t_data to counter
                     NextState("DATA"),
                     NextValue(dataOut, Cat(self.data, address, mode)),      # latching data to transmit
@@ -82,9 +82,9 @@ class DAC(Module):
                 NextState("BUSY"),
                 count_load.eq(3-1),                                         # load t_sync_ldac to counter
             ).Else(
-                pads.sdi.eq(dataOut[0]),
+                pads.sdi.eq(dataOut[-1]),
                 If(clk_toggle & clk_tick,
-                    NextValue(dataOut, (Cat(dataOut[1:], 0)))
+                    NextValue(dataOut, (Cat(0, dataOut[:-1])))
                 )
             )
         )
