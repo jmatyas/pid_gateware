@@ -6,15 +6,14 @@ SPIParams = namedtuple("DACParams", [
     "channels",     # amount of channels in use
     "data_width",   # width of one portion of data to be transferred
     "clk_width",    # clock half cycle width
-    "prof_width",
 ])
 
 class SPI(Module):
     def __init__(self, pads, params):
         
-        self.data = Signal(params.data_width*params.channels, reset_less=True)
+        self.dataSPI = Signal(params.data_width*params.channels, reset_less=True)
 
-        sr_data = Signal.like(self.data)    # shift register with input data latched in it
+        sr_data = Signal.like(self.dataSPI)    # shift register with input data latched in it
 
 
         self.start = Signal()           # triggers outputting data on dac
@@ -53,7 +52,7 @@ class SPI(Module):
         self.comb += fsm.ce.eq(clk_cnt_done)
         
         self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
-        self.comb += pads.sdi.eq(sr_data[-1])       # output data - MSB first
+        self.comb += pads.sdi.eq(sr_data[0])       # output data - LSB first
         
         fsm.act("IDLE",
             self.ready.eq(1),       
@@ -114,7 +113,7 @@ class SPI(Module):
                 If(fsm.before_leaving("HOLD"),
                     bits.eq(bits - 1),
                     # sr_data[1:].eq(sr_data),
-                    sr_data.eq(Cat(0, sr_data[:-1]))
+                    sr_data.eq(Cat(sr_data[1:], 0))         # LSB first
                 ),
                 # word counter is needed because DAC chip requires controller to set SYNC high after
                 # every sent 24 bits. That's how it knows whether is there any word/bit left to be sent.
@@ -129,10 +128,10 @@ class SPI(Module):
                 # Shiftin data is needed for multi-word transmissions
                 If(fsm.ongoing("DELAY"),
                     word_counter.eq(word_counter - 1),
-                    sr_data.eq(Cat(0, sr_data[:-1]))
+                    sr_data.eq(Cat(sr_data[1:], 0))
                 ),
                 If(data_load,
-                    sr_data.eq(self.data)
+                    sr_data.eq(self.dataSPI)
                 )
             )
         ]
