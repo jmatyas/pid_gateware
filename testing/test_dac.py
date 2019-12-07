@@ -18,13 +18,6 @@ class TB(Module):
         sample = Signal()
         self.comb += sample.eq(Cat(self.sclk, clk0) == 0b01)
 
-        # sr = Signal(len(self.dac))
-        # self.sync += [
-        #     If(~self.syncr & sample,
-        #         sr.eq(Cat(self.sdi, sr))
-        #     )
-        # ]
-
     @passive
     def log(self, data):
         while True:
