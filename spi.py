@@ -52,7 +52,8 @@ class SPI(Module):
         self.comb += fsm.ce.eq(clk_cnt_done)
         
         self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
-        self.comb += pads.sdi.eq(sr_data[0])       # output data - LSB first
+        # self.comb += pads.sdi.eq(sr_data[0])       # output data - LSB first
+        self.comb += pads.sdi.eq(sr_data[-1])       # output data - MSB first
         
         fsm.act("IDLE",
             self.ready.eq(1),       
@@ -113,7 +114,8 @@ class SPI(Module):
                 If(fsm.before_leaving("HOLD"),
                     bits.eq(bits - 1),
                     # sr_data[1:].eq(sr_data),
-                    sr_data.eq(Cat(sr_data[1:], 0))         # LSB first
+                    # sr_data.eq(Cat(sr_data[1:], 0))         # LSB first
+                    sr_data.eq(Cat(0, sr_data[:-1]))         # MSB first
                 ),
                 # word counter is needed because DAC chip requires controller to set SYNC high after
                 # every sent 24 bits. That's how it knows whether is there any word/bit left to be sent.
@@ -128,7 +130,8 @@ class SPI(Module):
                 # Shiftin data is needed for multi-word transmissions
                 If(fsm.ongoing("DELAY"),
                     word_counter.eq(word_counter - 1),
-                    sr_data.eq(Cat(sr_data[1:], 0))
+                    # sr_data.eq(Cat(sr_data[1:], 0))         # LSB first
+                    sr_data.eq(Cat(0, sr_data[:-1]))         # MSB first
                 ),
                 If(data_load,
                     sr_data.eq(self.dataSPI)
