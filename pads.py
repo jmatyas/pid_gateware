@@ -8,6 +8,7 @@ class SamplerPads(Module):
         self.cnv = Signal()
         self.clkout = Signal()
 
+
         spip = platform.request("{}_adc_spi_p".format(eem))
         spin = platform.request("{}_adc_spi_n".format(eem))
         cnv = platform.request("{}_cnv".format(eem))
@@ -19,16 +20,17 @@ class SamplerPads(Module):
         clkout_inv = Signal()
         sck = Signal()
 
-        self.specials += [SDR
+        self.specials += [
                 DifferentialOutput(self.cnv, cnv.p, cnv.n),
                 DifferentialOutput(1, sdr.p, sdr.n),
-                DDROutput(self.sck_en, 0, sck, ClockSignal("rio_phy")),
+                DDROutput(self.sck_en, 0, sck, ClockSignal("sys")),
                 DifferentialOutput(sck, spip.clk, spin.clk),
                 DifferentialInput(dp.clkout, dn.clkout, clkout_se),
                 # FIXME (hardware): CLKOUT is inverted
                 # (Sampler v2.0, v2.1) out on rising, in on falling
                 Instance("BUFR", i_I=clkout_se, o_O=clkout_inv)
         ]
+        
         self.comb += self.clkout.eq(~clkout_inv)
 
         # define clock here before the input delays below
@@ -56,21 +58,36 @@ class SamplerPads(Module):
                 "set_input_delay -clock {clk} -min -0.5 [get_ports {port}]",
                 clk=dp.clkout, port=sdop)
 
+class pgiaPads(Module):
+    def __init__(self, platform, eem):
+        self.sdi = Signal()
+        self.srclk = Signal()
+        self.rclk = Signal()
+        
+        pgia_spip = platform.request("{}_pgia_spi_p".format(eem))
+        pgia_spin = platform.request("{}_pgia_spi_n".format(eem))
+
+        self.specials += [
+            DifferentialOutput(self.sdi, pgia_spip.mosi, pgia_spin.mosi),
+            DifferentialOutput(self.srclk, pgia_spip.clk, pgia_spin.clk),
+            DifferentialOutput(self.rclk, pgia_spip.cs_n, pgia_spin.cs_n),
+        ]
 
 class ZotinoPads(Module):
     def __init__(self, platform, eem):
 
         self.sdi = Signal()
+        self.ldac = Signal()
         self.busy = Signal(reset = 1)
         self.syncr = Signal(reset = 1)
         self.rst = Signal(reset = 1)
-        self.clrn = Signal(reset = 1)
+        self.clr = Signal(reset = 1)
         self.sclk = Signal()
         
        
         spip = platform.request("{}_spi_p".format(eem))
         spin = platform.request("{}_spi_n".format(eem))
-        ldacn = platform.request("{}_ladac_n".format(eem))
+        ldacn = platform.request("{}_ldac_n".format(eem))
         busy = platform.request("{}_busy".format(eem))
         clrn = platform.request("{}_clr_n".format(eem))
 
@@ -79,6 +96,7 @@ class ZotinoPads(Module):
                 DifferentialOutput(self.sdi, spip.mosi, spin.mosi),
                 DifferentialOutput(self.sclk, spip.clk, spin.clk),
                 DifferentialOutput(self.syncr, spip.cs_n, spin.cs_n),
+                DifferentialOutput(self.clr, clrn.p, clrn.n),
 
                 DifferentialInput(busy.p, busy.n, self.busy),
         ]

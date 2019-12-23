@@ -12,6 +12,7 @@ class TB(Module):
         self.busy = Signal(reset = 1)
         self.syncr = Signal(reset = 1)
         self.sclk = Signal()
+        self.clr = Signal()
 
         clk0 = Signal()
         self.sync += clk0.eq(self.sclk)
@@ -27,7 +28,7 @@ class TB(Module):
     
 def main():
     params = DACParams(channels=2, data_width = 24, 
-        clk_width = 2)
+        clk_width = 2, init_seq = 0)
     tb = TB(params)
     dac = DAC(tb, params)
     tb.submodules += dac

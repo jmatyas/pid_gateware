@@ -1,14 +1,18 @@
 from migen import *
 
-from .adc_ser import ADC, ADCParams
-from .dac_ser import DAC, DACParams
-from .iir import IIR, IIRWidths
+from artiq.gateware.szservo.adc_ser import ADC, ADCParams
+from artiq.gateware.szservo.dac_ser import DAC_init, DAC, DACParams
+from artiq.gateware.szservo.iir import IIR, IIRWidths
+from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 
 class Servo(Module):
-    def __init__(self, adc_pads, dac_pads, adc_p, iir_p, dac_p):
+    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, dac_init_p, pgia_init_val):
         self.submodules.adc = ADC(adc_pads, adc_p)
         self.submodules.iir = IIR(iir_p)
         self.submodules.dac = DAC(dac_pads, dac_p)
+
+        self.submodules.pgia = PGIA(pgia_pads, pgia_p, pgia_init_val)
+        self.submodules.dac_init = DAC_init(dac_pads, dac_init_p)
 
         # assigning paths and signals - adc data to iir.adc and iir.dac to dac.profie
         # adc channels are reversed on Sampler
@@ -25,12 +29,14 @@ class Servo(Module):
         t_cycle = max(t_adc, t_iir, t_dac)
 
         self.start = Signal()
+        self.done = Signal()
+
         t_restart = t_cycle - t_adc + 1
 
         cnt = Signal(max = t_restart)
         cnt_done = Signal()
         active = Signal(3)
-        self.done = Signal()
+        
         self.sync += [
             If(self.dac.ready,
                 active[2].eq(0)
@@ -51,10 +57,13 @@ class Servo(Module):
                 cnt.eq(t_restart - 1)
             )
         ]
+        
 
         self.comb += [
             cnt_done.eq(cnt == 0),
-            self.adc.start.eq(self.start & cnt_done),
+            self.dac_init.start.eq(self.start & ~self.dac_init.initialized),
+            self.pgia.start.eq(self.start & ~self.pgia.initialized),
+            self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac_init.initialized),
             self.iir.start.eq(active[0] & self.adc.done),
             self.dac.start.eq(active[1] & (self.iir.shifting | self.iir.done)),
             self.done.eq(self.dac.ready)

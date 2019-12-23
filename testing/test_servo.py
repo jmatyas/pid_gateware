@@ -4,7 +4,7 @@ import unittest
 from migen import *
 from migen.genlib import io
 
-from artiq.gateware.test.szservo import test_adc, test_dac
+from artiq.gateware.szservo.testing import test_adc, test_dac, test_pgia, test_dac_init
 from artiq.gateware.szservo import servo
 
 
@@ -15,13 +15,20 @@ class ServoSim(servo.Servo):
         iir_p = servo.IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
                 accu=48, shift=11, channel=3, profile=5)
         self.dac_p = servo.DACParams(data_width = 24, clk_width = 2,
-                channels=adc_p.channels)
+                channels=adc_p.channels, init_seq = 0)
+
+        pgia_p = servo.PGIAParams(data_width = 16, clk_width = 2)
+        dac_init_p = servo.DACParams(data_width = 24, clk_width = 2,
+                channels=1, init_seq = 1)
 
         self.submodules.adc_tb = test_adc.TB(adc_p)
         self.submodules.dac_tb = test_dac.TB(self.dac_p)
 
-        servo.Servo.__init__(self, self.adc_tb, self.dac_tb,
-                adc_p, iir_p, self.dac_p)
+        self.submodules.pgia_tb = test_pgia.TB(pgia_p)
+        self.submodules.dac_init_tb = test_dac_init.TB(dac_init_p)
+
+        servo.Servo.__init__(self, self.adc_tb, self.pgia_tb, self.dac_tb,
+                adc_p, pgia_p, iir_p, self.dac_p, dac_init_p, 0x5555)
 
     def test(self):
         assert (yield self.done)
@@ -55,6 +62,20 @@ class ServoSim(servo.Servo):
         yield self.start.eq(1)
 
         yield
+        # yield self.start.eq(0)
+        for i in range (24*2*2-1):
+            yield
+        yield
+        yield self.dac_init.busy.eq(0)
+        for i in range(3):
+            yield
+        yield self.dac_init.busy.eq(1)
+        yield
+
+        while not (yield self.dac_init.initialized):
+            yield
+        
+        yield
         yield self.start.eq(0)
         while not (yield self.dac.start):
                 yield
@@ -73,9 +94,6 @@ class ServoSim(servo.Servo):
         while not (yield self.done):
             yield
         yield
-        yield
-        for i in range (200):
-            yield
 
         w = self.iir.widths
 

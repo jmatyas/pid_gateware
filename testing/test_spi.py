@@ -19,7 +19,7 @@ class TB(Module):
 
 def main():
     params = SPIParams(channels=2, data_width = 8, 
-        clk_width = 2)
+        clk_width = 2, init_seq = 1)
     tb = TB(params)
     spi = SPI(tb, params)
 
@@ -49,7 +49,7 @@ def main():
         #     yield
         # yield
         # yield dut.busy.eq(1)
-        while not (yield dut.ready):
+        while not (yield (dut.ready | dut.initialized)):
             yield
         yield
         

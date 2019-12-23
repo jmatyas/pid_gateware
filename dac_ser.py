@@ -6,7 +6,19 @@ from . import spi
 
 DACParams = spi.SPIParams
 
-# konfiguracja urzadzenia nastepuje przez komendy software'owe z poziomy phy/rtio. do wiadomosci trzeba dokleic adresy
+
+class DAC_init(spi.SPI):
+    def __init__(self, pads, params):
+        # it sets DAC config register OFS0 to value 8192. It allows the output of DACs to swing from
+        # 10 to -10 V
+        super().__init__(pads, params)
+
+        AD53XX_CMD_OFFSET = 2 << 22
+        AD53XX_SPECIAL_OFS0 = 2 << 16
+        
+        self.comb += pads.ldac.eq(1), pads.clr.eq(1)
+        self.comb += self.dataSPI.eq(AD53XX_CMD_OFFSET | AD53XX_SPECIAL_OFS0 | 0x2000)
+
 
 class DAC(spi.SPI):
     def __init__(self, pads, params):
@@ -30,6 +42,9 @@ class DAC(spi.SPI):
        
         ###
         
+        self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
+        self.comb += pads.clr.eq(1)                 # clr as well
+
         self.comb += mode.eq(3), group.eq(1)        # group and mode are hard-coded
         
         # concatanation of latched data + group + channel + mode 

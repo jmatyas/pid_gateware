@@ -6,6 +6,7 @@ SPIParams = namedtuple("DACParams", [
     "channels",     # amount of channels in use
     "data_width",   # width of one portion of data to be transferred
     "clk_width",    # clock half cycle width
+    "init_seq",     # whether it is used for initalization and 'latch' at the end is needed
 ])
 
 class SPI(Module):
@@ -19,6 +20,8 @@ class SPI(Module):
         self.start = Signal()           # triggers outputting data on dac
         self.ready = Signal()           # when it's high, module is ready to accept new data
         self.busy = Signal(reset = 1)   # for testing purpose - for using it should be deleted and all occurances should be replaced with pads.busy
+
+        self.initialized = Signal()
 
         clk_counter = Signal(max=params.clk_width)
         clk_cnt_done = Signal()
@@ -51,7 +54,7 @@ class SPI(Module):
         self.submodules.fsm = fsm = CEInserter()(FSM("IDLE"))
         self.comb += fsm.ce.eq(clk_cnt_done)
         
-        self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
+        # self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
         self.comb += pads.sdi.eq(sr_data[0])       # output data - LSB first
         # self.comb += pads.sdi.eq(sr_data[-1])       # output data - MSB first
         
@@ -96,14 +99,26 @@ class SPI(Module):
         )
 
         # waiting for busy being driven high again - 
-        # this means the DAC chip accepted data and is ready for next transmission
+        # this means the DAC chip accepted data and is ready for next transmission;
+        # if init_seq is 1, then the state after receiving busy signal is END - it sets 'initialized'
+        # output high, to let servo know initailization has ended. Otherwise, when all words (for each channels)
+        # has been already sent, fsm switches back to IDLE and awaits for next transmission. If there are some
+        # channels not served already, the next state is "SETUP" and FSM continues the transmission.
         fsm.act("BUSY_HIGH",
-            If((self.busy & (word_counter == 0)),   
+            If(params.init_seq,
+                If(self.busy,   
+                    NextState("END")
+                )
+            ).Elif((self.busy & (word_counter == 0)),   
                 NextState("IDLE")
             ).Elif(self.busy,
                 NextState("SETUP"),
                 cnt_load.eq(1)
             )
+        )
+
+        fsm.act("END",
+            self.initialized.eq(1)
         )
 
 
