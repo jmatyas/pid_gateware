@@ -6,18 +6,21 @@ from . import spi
 
 DACParams = spi.SPIParams
 
+AD53XX_CMD_OFFSET = 2 << 22
+AD53XX_SPECIAL_OFS0 = 2 << 16
 
-class DAC_init(spi.SPI):
-    def __init__(self, pads, params):
-        # it sets DAC config register OFS0 to value 8192. It allows the output of DACs to swing from
-        # 10 to -10 V
-        super().__init__(pads, params)
 
-        AD53XX_CMD_OFFSET = 2 << 22
-        AD53XX_SPECIAL_OFS0 = 2 << 16
+# class DAC_init(spi.SPI):
+#     def __init__(self, pads, params):
+#         # it sets DAC config register OFS0 to value 8192. It allows the output of DACs to swing from
+#         # 10 to -10 V
+#         super().__init__(pads, params)
+
+#         AD53XX_CMD_OFFSET = 2 << 22
+#         AD53XX_SPECIAL_OFS0 = 2 << 16
         
-        self.comb += pads.ldac.eq(1), pads.clr.eq(1)
-        self.comb += self.dataSPI.eq(AD53XX_CMD_OFFSET | AD53XX_SPECIAL_OFS0 | 0x2000)
+#         self.comb += pads.ldac.eq(1), pads.clr.eq(1)
+#         self.comb += self.dataSPI.eq(AD53XX_CMD_OFFSET | AD53XX_SPECIAL_OFS0 | 0x2000)
 
 
 class DAC(spi.SPI):
@@ -41,9 +44,6 @@ class DAC(spi.SPI):
 
        
         ###
-        
-        self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
-        self.comb += pads.clr.eq(1)                 # clr as well
 
         self.comb += mode.eq(3), group.eq(1)        # group and mode are hard-coded
         
@@ -54,5 +54,17 @@ class DAC(spi.SPI):
                 data[ch].eq(Cat(0, 0, self.profile[ch][50:])),
                 dataOut[ch].eq(Cat(data[ch], address[ch], mode))
             ]
-        self.comb += latch_dataOut.eq(Cat([dataOut[ch] for ch in range(params.channels)]))      # concatenation of data from all of channels
-        self.comb += self.dataSPI.eq(latch_dataOut)
+        self.comb += latch_dataOut.eq(Cat([dataOut[ch] for ch in range(params.channels)]))      # concatenation of data from all of channels, ch0 is the LSB part
+        # self.comb += self.dataSPI.eq(latch_dataOut)
+
+        self.comb += [
+            If(self.init_latch,
+                # it sets DAC config register OFS0 to value 8192. It allows the output of DACs to swing from
+                # 10 to -10 V
+                pads.ldac.eq(1), pads.clr.eq(1),
+                self.dataSPI.eq(AD53XX_CMD_OFFSET | AD53XX_SPECIAL_OFS0 | 0x2000)
+            ).Else(
+                self.dataSPI.eq(latch_dataOut),
+                pads.ldac.eq(0), pads.clr.eq(1),
+            )
+        ]

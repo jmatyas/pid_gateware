@@ -1,18 +1,27 @@
 from migen import *
 
 from artiq.gateware.szservo.adc_ser import ADC, ADCParams
-from artiq.gateware.szservo.dac_ser import DAC_init, DAC, DACParams
+from artiq.gateware.szservo.dac_ser import DAC, DACParams
 from artiq.gateware.szservo.iir import IIR, IIRWidths
 from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
+from artiq.language.units import us, ns
+
+
+T_CYCLE = (2*(8 + 64) + 2)*8*ns  # Must match gateware Servo.t_cycle.
+COEFF_SHIFT = 11
+B_NORM = 1 << COEFF_SHIFT + 1
+A_NORM = 1 << COEFF_SHIFT
+COEFF_WIDTH = 18
+COEFF_MAX = 1 << COEFF_WIDTH - 1
+
 
 class Servo(Module):
-    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, dac_init_p, pgia_init_val):
+    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val):
         self.submodules.adc = ADC(adc_pads, adc_p)
         self.submodules.iir = IIR(iir_p)
         self.submodules.dac = DAC(dac_pads, dac_p)
 
         self.submodules.pgia = PGIA(pgia_pads, pgia_p, pgia_init_val)
-        self.submodules.dac_init = DAC_init(dac_pads, dac_init_p)
 
         # assigning paths and signals - adc data to iir.adc and iir.dac to dac.profie
         # adc channels are reversed on Sampler
@@ -61,12 +70,56 @@ class Servo(Module):
 
         self.comb += [
             cnt_done.eq(cnt == 0),
-            self.dac_init.start.eq(self.start & ~self.dac_init.initialized),
+            self.dac.init.eq(self.start & ~self.dac.initialized),
             self.pgia.start.eq(self.start & ~self.pgia.initialized),
-            self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac_init.initialized),
+            self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized),
             self.iir.start.eq(active[0] & self.adc.done),
             self.dac.start.eq(active[1] & (self.iir.shifting | self.iir.done)),
             self.done.eq(self.dac.ready)
         ]
 
+    def set_coeff(self, channel, profile, coeff, value):
+        word, addr, mask = self.iir._coeff(channel, profile, coeff)
+        
+        # print(channel, profile, coeff, value, word, addr, mask, '{0:b}'.format(mask), len('{0:b}'.format(mask)))
+        
+        w = self.iir.widths
+        val = Signal(2*w.coeff)
+        # val - data read from memory
+        # value - data to set
+        self.sync += val.eq(self.iir.m_coeff[addr])
+        if word:
+            self.comb += val.eq((val & mask) | ((value & mask) << w.coeff))
+        else:
+            self.comb += val.eq((value & mask) | (val & (mask << w.coeff)))
+
+        self.sync += self.iir.m_coeff[addr].eq(val)
+    
+
+def coeff_to_mu(Kp, Ki):
+    Kp *=B_NORM
+    if Ki == 0:
+        # pure P
+        a1 = 0
+        b1 = 0
+        b0 = int(round(Kp))
+    else:
+        # I or PI
+        Ki *= B_NORM*T_CYCLE/2.
+        c = 1.
+        a1 = A_NORM
+        b0 = int(round(Kp + Ki*c))
+        b1 = int(round(Ki - 2.*Kp))
+        if b1 == -b0:
+            raise ValueError("low integrator gain and/or gain limit")
+
+    if (b0 >= COEFF_MAX or b0 < -COEFF_MAX or
+            b1 >= COEFF_MAX or b1 < -COEFF_MAX):
+        raise ValueError("high gains")
+    
+    return a1, b0, b1
+
+
+if __name__ == "__main__":
+    print(coeff_to_mu(2, 0))
         

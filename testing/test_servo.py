@@ -1,82 +1,90 @@
 import logging
 import unittest
 
+from math import log2, ceil
+
+
 from migen import *
 from migen.genlib import io
 
-from artiq.gateware.szservo.testing import test_adc, test_dac, test_pgia, test_dac_init
+from artiq.gateware.szservo.testing import test_adc, test_dac, test_pgia
 from artiq.gateware.szservo import servo
 
 
 class ServoSim(servo.Servo):
     def __init__(self):
-        adc_p = servo.ADCParams(width=16, channels=8, lanes=4,
+        adc_p = servo.ADCParams(width=16, channels=2, lanes=1,
                 t_cnvh=4, t_conv=57 - 4, t_rtt=4 + 4)
         iir_p = servo.IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
-                accu=48, shift=11, channel=3, profile=5)
+                accu=48, shift=11, channel=ceil(log2(adc_p.channels)), profile=1)
         self.dac_p = servo.DACParams(data_width = 24, clk_width = 2,
-                channels=adc_p.channels, init_seq = 0)
+                channels=adc_p.channels)
 
         pgia_p = servo.PGIAParams(data_width = 16, clk_width = 2)
-        dac_init_p = servo.DACParams(data_width = 24, clk_width = 2,
-                channels=1, init_seq = 1)
-
         self.submodules.adc_tb = test_adc.TB(adc_p)
         self.submodules.dac_tb = test_dac.TB(self.dac_p)
 
         self.submodules.pgia_tb = test_pgia.TB(pgia_p)
-        self.submodules.dac_init_tb = test_dac_init.TB(dac_init_p)
 
         servo.Servo.__init__(self, self.adc_tb, self.pgia_tb, self.dac_tb,
-                adc_p, pgia_p, iir_p, self.dac_p, dac_init_p, 0x5555)
+                adc_p, pgia_p, iir_p, self.dac_p, 0x5555)
+        
+        self.channel = channel = 0
+        self.adc = adc = 0
+        self.profile = profile = 0
+        
+        self.sync +=[
+            If(~self.iir.loading,
+                self.iir.adc[channel].eq(adc)                     # assinging adc number to iir and in result to dac channel
+            ),
+            self.iir.ctrl[channel].en_iir.eq(1),
+            self.iir.ctrl[channel].en_out.eq(1),
+            self.iir.ctrl[channel].profile.eq(profile),
+        ]
 
-    def test(self):
-        assert (yield self.done)
-
-        adc = 7             # adc number to take data from (number of adc [8] - adc - 1)
-        x0 = 0x0141
-        yield self.adc_tb.data[-adc-1].eq(x0)
-        channel = 2         # dac number to route data to
-        yield self.iir.adc[channel].eq(adc)                     # assinging adc number to iir and in result to dac channel
-        yield self.iir.ctrl[channel].en_iir.eq(1)
-        yield self.iir.ctrl[channel].en_out.eq(1)
-        profile = 0                                             # dont care for profile
-        yield self.iir.ctrl[channel].profile.eq(profile)
-        x1 = 0x0743
-        yield from self.iir.set_state(adc, x1, coeff="x1")      # assigning x1 as a previous value of input
-        y1 = 0x1145
-        yield from self.iir.set_state(channel, y1,              # assigning y1 as previous value of output
-                profile=profile, coeff="y1")
-
+        a1, b0, b1 = servo.coeff_to_mu(Kp = 4, Ki = 0)
+        
         # pow - phase offset word
         # offset - iir offset
         # ftw - frequency tuning word
-        coeff = dict(pow=0x1333, offset=0x1531, ftw0=0x1727, ftw1=0x1929,
-                a1=0x0135, b0=0x0337, b1=0x0539, cfg=adc | (0 << 3))
+        self.coeff = coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
+                a1=a1, b0=b0, b1=b1, cfg=self.adc | (0 << 3))
+        
         for ks in "pow offset ftw0 ftw1", "a1 b0 b1 cfg":
             for k in ks.split():
-                yield from self.iir.set_coeff(channel, value=coeff[k],
-                        profile=profile, coeff=k)
-            yield
+                self.set_coeff(self.channel, value=coeff[k],
+                        profile=self.profile, coeff=k)
+                        
+    def test(self):
+        x0 = 0x0141
+        x1 = 0x0743
+        y1 = 0x1145
+        
+        # yield from self.test_iter(x0, x1, y1, self.adc, self.channel, self.profile)
+        assert (yield self.done)
+
+        yield from self.set_states(x0, x1, y1, self.adc, self.channel, self.profile)
+
 
         yield self.start.eq(1)
-
-        yield
-        # yield self.start.eq(0)
-        for i in range (24*2*2-1):
-            yield
-        yield
-        yield self.dac_init.busy.eq(0)
-        for i in range(3):
-            yield
-        yield self.dac_init.busy.eq(1)
-        yield
-
-        while not (yield self.dac_init.initialized):
-            yield
+        yield from self.init_seq()
+       
         
-        yield
-        yield self.start.eq(0)
+        # yield self.start.eq(0)
+        yield from self.servo_iter()
+
+        yield from self.check_iter(x0, x1, y1)
+    
+        
+    
+    def set_states(self, x0, x1, y1, adc, channel, profile):
+        
+        yield self.adc_tb.data[-adc-1].eq(x0)
+        yield from self.iir.set_state(adc, x1, coeff="x1")      # assigning x1 as a previous value of input
+        yield from self.iir.set_state(channel, y1,              # assigning y1 as previous value of output
+                profile=profile, coeff="y1")
+
+    def servo_iter(self):
         while not (yield self.dac.start):
                 yield
         for ch in range (self.dac_p.channels):
@@ -95,35 +103,54 @@ class ServoSim(servo.Servo):
             yield
         yield
 
+    def init_seq(self):
+        yield
+        while (yield self.dac.ready):
+            yield
+        for i in range (self.dac_p.data_width*2*self.dac_p.clk_width-1):
+            yield
+        yield
+        yield self.dac.busy.eq(0)
+        for i in range(3):
+            yield
+        yield self.dac.busy.eq(1)
+        yield
+        while not (yield self.dac.initialized):
+            yield        
+        yield
+    
+    def check_iter(self, x0, x1, y1):
         w = self.iir.widths
 
         x0 = x0 << (w.state - w.adc - 1)
-        _ = yield from self.iir.get_state(adc, coeff="x1")
+        _ = yield from self.iir.get_state(self.adc, coeff="x1")
         assert _ == x0, (hex(_), hex(x0))
 
-        offset = coeff["offset"] << (w.state - w.coeff - 1)
-        a1, b0, b1 = coeff["a1"], coeff["b0"], coeff["b1"]
+        offset = self.coeff["offset"] << (w.state - w.coeff - 1)
+        a1, b0, b1 = self.coeff["a1"], self.coeff["b0"], self.coeff["b1"]
         out = (
                 0*(1 << w.shift - 1) +  # rounding
                 a1*(y1 + 0) + b0*(x0 + offset) + b1*(x1 + offset)
         ) >> w.shift
         y1 = min(max(0, out), (1 << w.state - 1) - 1)
 
-        _ = yield from self.iir.get_state(channel, profile, coeff="y1")
+        _ = yield from self.iir.get_state(self.channel, self.profile, coeff="y1")
         assert _ == y1, (hex(_), hex(y1))
-
-        # _ = yield self.dds_tb.ddss[channel].ftw
-        # ftw = (coeff["ftw1"] << 16) | coeff["ftw0"]
-        # assert _ == ftw, (hex(_), hex(ftw))
-
-        # _ = yield self.dds_tb.ddss[channel].pow
-        # assert _ == coeff["pow"], (hex(_), hex(coeff["pow"]))
-
-        # _ = yield self.dds_tb.ddss[channel].asf
-        # asf = y1 >> (w.state - w.asf - 1)
-        # assert _ == asf, (hex(_), hex(asf))
         
+    def test_iter(self, x0, x1, y1, adc, channel, profile):
+        
+        assert (yield self.done)
 
+        yield from self.set_states(x0, x1, y1, self.adc, self.channel, self.profile)
+
+
+        yield self.start.eq(1)
+        yield from self.init_seq()
+        
+        yield self.start.eq(0)
+        yield from self.servo_iter()
+
+        yield from self.check_iter(x0, x1, y1)        
 
 def main():
     servo = ServoSim()

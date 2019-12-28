@@ -14,11 +14,11 @@ class TB(Module):
 def main():
     p = DACParams(channels = 1, data_width = 24, clk_width = 2, init_seq = 1)
     tb = TB(p)
-    dac = DAC_init(tb, p)
-    tb.submodules += dac
+    dac_init = DAC_init(tb, p)
+    tb.submodules += dac_init
 
     def run(tb):
-        dut = dac
+        dut = dac_init
         yield dut.start.eq(1)
         yield
         yield dut.start.eq(0)
