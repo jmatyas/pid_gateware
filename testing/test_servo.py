@@ -10,10 +10,12 @@ from migen.genlib import io
 from artiq.gateware.szservo.testing import test_adc, test_dac, test_pgia
 from artiq.gateware.szservo import servo
 
+ch_no = 2
+t_busy = 188
 
 class ServoSim(servo.Servo):
     def __init__(self):
-        adc_p = servo.ADCParams(width=16, channels=2, lanes=1,
+        adc_p = servo.ADCParams(width=16, channels=8, lanes=4,
                 t_cnvh=4, t_conv=57 - 4, t_rtt=4 + 4)
         iir_p = servo.IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
                 accu=48, shift=11, channel=ceil(log2(adc_p.channels)), profile=1)
@@ -27,9 +29,12 @@ class ServoSim(servo.Servo):
         self.submodules.pgia_tb = test_pgia.TB(pgia_p)
 
         servo.Servo.__init__(self, self.adc_tb, self.pgia_tb, self.dac_tb,
-                adc_p, pgia_p, iir_p, self.dac_p, 0x5555)
+                adc_p, pgia_p, iir_p, self.dac_p, 0x5555, ch_no)
         
-        self.channel = channel = 0
+        if ch_no is None:
+            self.channel = channel = 0
+        else:
+            self.channel = channel = ch_no
         self.adc = adc = 0
         self.profile = profile = 0
         
@@ -70,11 +75,21 @@ class ServoSim(servo.Servo):
         yield from self.init_seq()
        
         
-        # yield self.start.eq(0)
+        # # yield self.start.eq(0)
+        
+
         yield from self.servo_iter()
 
         yield from self.check_iter(x0, x1, y1)
     
+
+        # for i in range(1000):
+        #     yield
+        yield from self.servo_iter()
+
+        yield from self.check_iter(x0, x1, y1)
+
+
         
     
     def set_states(self, x0, x1, y1, adc, channel, profile):
@@ -85,39 +100,89 @@ class ServoSim(servo.Servo):
                 profile=profile, coeff="y1")
 
     def servo_iter(self):
-        while not (yield self.dac.start):
-                yield
-        for ch in range (self.dac_p.channels):
-            for i in range (self.dac_p.data_width*self.dac_p.clk_width*2-1):
-                yield
-            yield
-            yield self.dac.busy.eq(0)
-            for i in range(3):
-                yield
-            yield self.dac.busy.eq(1)
-            yield
-        while not (yield self.dac.ready):
+        while not (yield self.dac.start_dac):
             yield
         yield
         while not (yield self.done):
-            yield
-        yield
+        # for i in range(self.dac_p.channels):
+            clk_cycles = 0
+            while (yield self.dac_tb.syncr):
+                    yield        
+            
+            while not (yield self.dac_tb.syncr):
+                yield
+                clk_cycles +=1
+
+            assert clk_cycles -1 == self.dac_p.data_width*2*self.dac_p.clk_width - 1
+
+            # max waiting time between sync rising and busy falling is 42 ns ~ 5 cycles
+            for i in range (5):
+                yield
+            yield self.dac.busy.eq(0)
+            for i in range(t_busy):
+                yield
+            yield self.dac.busy.eq(1)
+
+            while not (yield self.dac.spi_ready):
+                yield      
+
+
+        # while not (yield self.dac.start_dac):
+        #         yield
+        # for ch in range (self.dac_p.channels):
+        #     for i in range (self.dac_p.data_width*self.dac_p.clk_width*2-1):
+        #         yield
+        #     yield
+        #     yield self.dac.busy.eq(0)
+        #     for i in range(3):
+        #         yield
+        #     yield self.dac.busy.eq(1)
+        #     yield
+        # while not (yield self.dac.ready):
+        #     yield
+        # yield
+        # while not (yield self.done):
+        #     yield
+        # yield
 
     def init_seq(self):
-        yield
+        
+        clk_cycles = 0
         while (yield self.dac.ready):
             yield
-        for i in range (self.dac_p.data_width*2*self.dac_p.clk_width-1):
+        
+        while not (yield self.dac_tb.syncr):
             yield
-        yield
+            clk_cycles += 1
+
+        assert clk_cycles -1 == self.dac_p.data_width*2*self.dac_p.clk_width-1
+        
+        # max waiting time between sync rising and busy falling is 42 ns ~ 5 cycles
+        for i in range(5):
+            yield
         yield self.dac.busy.eq(0)
-        for i in range(3):
+        for i in range(t_busy):
             yield
         yield self.dac.busy.eq(1)
-        yield
-        while not (yield self.dac.initialized):
+        while not (yield self.dac.initialized & self.pgia.initialized):
             yield        
-        yield
+
+     
+     
+        # yield
+        # while (yield self.dac.ready):
+        #     yield
+        # for i in range (self.dac_p.data_width*2*self.dac_p.clk_width-1):
+        #     yield
+        # yield
+        # yield self.dac.busy.eq(0)
+        # for i in range(3):
+        #     yield
+        # yield self.dac.busy.eq(1)
+        # yield
+        # while not (yield self.dac.initialized):
+        #     yield        
+        # yield
     
     def check_iter(self, x0, x1, y1):
         w = self.iir.widths

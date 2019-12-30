@@ -7,19 +7,20 @@ from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.language.units import us, ns
 
 
-T_CYCLE = (2*(8 + 64) + 2)*8*ns  # Must match gateware Servo.t_cycle.
+# T_CYCLE = Servo.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
 COEFF_SHIFT = 11
 B_NORM = 1 << COEFF_SHIFT + 1
 A_NORM = 1 << COEFF_SHIFT
 COEFF_WIDTH = 18
 COEFF_MAX = 1 << COEFF_WIDTH - 1
 
+t_dac_busy = 188    # 188 * 8ns = 1.5us; 8 ns when sys_clk=125MHz
 
 class Servo(Module):
-    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val):
+    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val, ch_no = None):
         self.submodules.adc = ADC(adc_pads, adc_p)
         self.submodules.iir = IIR(iir_p)
-        self.submodules.dac = DAC(dac_pads, dac_p)
+        self.submodules.dac = DAC(dac_pads, dac_p, ch_no)
 
         self.submodules.pgia = PGIA(pgia_pads, pgia_p, pgia_init_val)
 
@@ -33,9 +34,16 @@ class Servo(Module):
         t_adc = (adc_p.t_cnvh + adc_p.t_conv + adc_p.t_rtt +
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
-        t_dac = (24*4 + 2 + 3)
+        if ch_no is None:
+            t_dac = ((dac_p.data_width*2*dac_p.clk_width + t_dac_busy + 5 + 6)*dac_p.channels)
+        else:
+            t_dac = dac_p.data_width*2*dac_p.clk_width + t_dac_busy + 5 + 6
 
-        t_cycle = max(t_adc, t_iir, t_dac)
+        print(t_adc, t_iir, t_dac)
+        self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
+
+
+        T_CYCLE = self.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
 
         self.start = Signal()
         self.done = Signal()
@@ -50,7 +58,7 @@ class Servo(Module):
             If(self.dac.ready,
                 active[2].eq(0)
             ),
-            If(self.dac.start & self.dac.ready,
+            If(self.dac.start_dac & self.dac.ready,
                 active[2].eq(1),
                 active[1].eq(0)
             ),
@@ -74,7 +82,7 @@ class Servo(Module):
             self.pgia.start.eq(self.start & ~self.pgia.initialized),
             self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized),
             self.iir.start.eq(active[0] & self.adc.done),
-            self.dac.start.eq(active[1] & (self.iir.shifting | self.iir.done)),
+            self.dac.start_dac.eq(active[1] & (self.iir.shifting | self.iir.done)),
             self.done.eq(self.dac.ready)
         ]
 
