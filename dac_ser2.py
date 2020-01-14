@@ -15,6 +15,8 @@ AD53XX_CMD_OFFSET = 2<<22
 class DAC(spi2.SPI2):
     def __init__(self, pads, params):
         super().__init__(pads, params)
+        self.clock_domains.cd_sys = ClockDomain()
+
 
         self.profile =[Signal(32 + 16 + 16, reset_less=True)    # 64 bit wide data delivered to dac
             for i in range(params.channels)]
