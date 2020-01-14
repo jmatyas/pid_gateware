@@ -10,7 +10,8 @@ DACParams = spi2.SPIParams
 AD53XX_SPECIAL_OFS0 = 2 << 16
 AD53XX_SPECIAL_OFS1 = 3 << 16
 ZOTINO_OFFSET = 8192
-AD53XX_CMD_OFFSET = 2<<22
+# AD53XX_CMD_OFFSET = 2<<22
+AD53XX_CMD_SPECIAL = 0 << 22
 
 class DAC(spi2.SPI2):
     def __init__(self, pads, params):
@@ -57,15 +58,17 @@ class DAC(spi2.SPI2):
             # whith next rising edge initailizing sequence is latched into //single_word// vector 
             # and spi communication is began
             If(self.dac_init & ~self.initialized,
-                NextValue(single_word, (Cat((AD53XX_SPECIAL_OFS0 | ZOTINO_OFFSET), Replicate(0, 6)))),
+                NextValue(single_word, (AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 &0x3FFF))),
                 NextValue(self.spi_start, 1),
-                NextState("INIT")
+                NextState("INIT"),
+                NextValue(pads.ldac, 1)
+
             # if controller issues a start event, a number of words is latched into the counter and data 
             # from //profiles// is calculated and latched also
             ).Elif(self.dac_start,
                 NextValue(words, params.channels),
                 NextValue(sr_words, Cat([dataOut[ch] for ch in range(params.channels)])),
-
+                NextValue(pads.ldac, 0),
                 NextState("DATA")
             )
         )           

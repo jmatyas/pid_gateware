@@ -48,7 +48,7 @@ class SPI2(Module):
         self.submodules.fsm = fsm = CEInserter()(FSM("IDLE"))
         self.comb += fsm.ce.eq(clk_cnt_done)
         
-        self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
+        # self.comb += pads.ldac.eq(0)                # ldac driven constantly to 0
         # self.comb += pads.sdi.eq(sr_data[0])       # output data - LSB first
         self.comb += pads.sdi.eq(sr_data[-1])       # output data - MSB first
         
