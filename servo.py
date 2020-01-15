@@ -1,7 +1,7 @@
 from migen import *
 
 from artiq.gateware.szservo.adc_ser import ADC, ADCParams
-from artiq.gateware.szservo.dac_ser import DAC, DACParams
+from artiq.gateware.szservo.dac_ser2 import DAC, DACParams
 from artiq.gateware.szservo.iir import IIR, IIRWidths
 from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.language.units import us, ns
@@ -11,16 +11,26 @@ from artiq.language.units import us, ns
 COEFF_SHIFT = 11
 B_NORM = 1 << COEFF_SHIFT + 1
 A_NORM = 1 << COEFF_SHIFT
-COEFF_WIDTH = 18
-COEFF_MAX = 1 << COEFF_WIDTH - 1
+COEFF_width = 18
+COEFF_MAX = 1 << COEFF_width - 1
 
 t_dac_busy = 188    # 188 * 8ns = 1.5us; 8 ns when sys_clk=125MHz
 
 class Servo(Module):
-    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val, ch_no = None):
+    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val):
+        self.clock_domains.cd_sys = ClockDomain()
+        
+        length = adc_p.channels*8
+        addrs = Array(Signal(max = 4 << iir_p.profile + iir_p.channel) for i in range(length))
+        values = Array(Signal(iir_p.coeff) for i in range(length))
+        words = Array(Signal() for i in range(length))
+        masks = Array(Signal(iir_p.coeff) for i in range (length))
+
+        a1, b0, b1 = coeff_to_mu(Kp = 1, Ki = 0)
+        
         self.submodules.adc = ADC(adc_pads, adc_p)
-        self.submodules.iir = IIR(iir_p)
-        self.submodules.dac = DAC(dac_pads, dac_p, ch_no)
+        self.submodules.iir = IIR(iir_p, addrs, values, words, masks)
+        self.submodules.dac = DAC(dac_pads, dac_p)
 
         self.submodules.pgia = PGIA(pgia_pads, pgia_p, pgia_init_val)
 
@@ -34,12 +44,12 @@ class Servo(Module):
         t_adc = (adc_p.t_cnvh + adc_p.t_conv + adc_p.t_rtt +
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
-        if ch_no is None:
-            t_dac = ((dac_p.data_width*2*dac_p.clk_width + t_dac_busy + 5 + 6)*dac_p.channels)
-        else:
-            t_dac = dac_p.data_width*2*dac_p.clk_width + t_dac_busy + 5 + 6
+        # if ch_no is None:
+        t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1)
+        # else:
+        #     t_dac = dac_p.data_width*2*dac_p.clk_width + 6 + 2
 
-        print(t_adc, t_iir, t_dac)
+        # print(t_adc, t_iir, t_dac)
         self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
 
 
@@ -55,10 +65,10 @@ class Servo(Module):
         active = Signal(3)
         
         self.sync += [
-            If(self.dac.ready,
+            If(self.dac.dac_ready,
                 active[2].eq(0)
             ),
-            If(self.dac.start_dac & self.dac.ready,
+            If(self.dac.dac_start & self.dac.dac_ready,
                 active[2].eq(1),
                 active[1].eq(0)
             ),
@@ -78,31 +88,89 @@ class Servo(Module):
 
         self.comb += [
             cnt_done.eq(cnt == 0),
-            self.dac.init.eq(self.start & ~self.dac.initialized),
+            self.dac.dac_init.eq(self.start & ~self.dac.initialized),
             self.pgia.start.eq(self.start & ~self.pgia.initialized),
-            self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized),
+            self.iir.start_coeff.eq(self.start & ~self.iir.done_writing),
+            self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized & self.iir.done_writing),
             self.iir.start.eq(active[0] & self.adc.done),
-            self.dac.start_dac.eq(active[1] & (self.iir.shifting | self.iir.done)),
-            self.done.eq(self.dac.ready)
+            self.dac.dac_start.eq(active[1] & (self.iir.shifting | self.iir.done)),
+            self.done.eq(self.dac.dac_ready)
         ]
 
-    def set_coeff(self, channel, profile, coeff, value):
-        word, addr, mask = self.iir._coeff(channel, profile, coeff)
-        
-        # print(channel, profile, coeff, value, word, addr, mask, '{0:b}'.format(mask), len('{0:b}'.format(mask)))
-        
-        w = self.iir.widths
-        val = Signal(2*w.coeff)
-        # val - data read from memory
-        # value - data to set
-        self.sync += val.eq(self.iir.m_coeff[addr])
-        if word:
-            self.comb += val.eq((val & mask) | ((value & mask) << w.coeff))
-        else:
-            self.comb += val.eq((value & mask) | (val & (mask << w.coeff)))
 
-        self.sync += self.iir.m_coeff[addr].eq(val)
-    
+        # # self.channel = channel = 1
+        # adc = 0
+        profile = 0
+        # channel0 = 0
+        # channel1 = 1
+
+        for ix in range(adc_p.channels):
+            ch = ix
+            adc = ix
+            coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
+                a1=a1, b0=b0, b1=b1, cfg = adc | (0 << 3))
+
+            for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
+                word, addr, mask = self.iir._coeff(ch, profile, coeff = k)
+                self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
+                # print(k, word, addr, mask, coeff[k], ix*8, i)
+
+
+            self.comb +=[
+                If(~self.iir.loading,
+                    self.iir.adc[ch].eq(adc)                     # assinging adc number to iir and in result to dac channel
+                ),
+                self.iir.ctrl[ch].en_iir.eq(1),
+                self.iir.ctrl[ch].en_out.eq(1),
+                self.iir.ctrl[ch].profile.eq(profile),
+            ]
+
+# # --------------------------------------------
+# # ----------------to ponizej sie skompilowalo i dziala  w symualacji
+# # -------------------------------------------
+#  # # self.channel = channel = 1
+#         adc0 = 0
+#         adc1 = 1
+#         profile = 0
+#         channel0 = 0
+#         channel1 = 1
+
+#         # for ix in range(adc_p.channels):
+#         # ch = ix
+#         # adc = ix
+#         coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
+#             a1=a1, b0=b0, b1=b1, cfg = adc0 | (0 << 3))
+
+#         for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
+#             word, addr, mask = self.iir._coeff(channel0, profile, coeff = k)
+#             # self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
+#             self.comb += addrs[i].eq(addr), words[i].eq(word), masks[i].eq(mask), values[i].eq(coeff[k])
+            
+#             # print(k, word, addr, mask, coeff[k], ix*8, i)
+
+#         coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
+#             a1=a1, b0=b0, b1=b1, cfg = adc1 | (0 << 3))
+
+#         for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
+#             word, addr, mask = self.iir._coeff(channel1, profile, coeff = k)
+#             # self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
+#             self.comb += addrs[i+8].eq(addr), words[i+8].eq(word), masks[i+8].eq(mask), values[i+8].eq(coeff[k])
+
+#         self.comb +=[
+#             If(~self.iir.loading,
+#                 self.iir.adc[channel0].eq(adc0),                     # assinging adc number to iir and in result to dac channel
+#                 self.iir.adc[channel1].eq(adc1),
+#             ),
+#             self.iir.ctrl[channel0].en_iir.eq(1),
+#             self.iir.ctrl[channel0].en_out.eq(1),
+#             self.iir.ctrl[channel0].profile.eq(profile),
+            
+#             self.iir.ctrl[channel1].en_iir.eq(1),
+#             self.iir.ctrl[channel1].en_out.eq(1),
+#             self.iir.ctrl[channel1].profile.eq(profile),
+
+#         ]
+
 
 def coeff_to_mu(Kp, Ki):
     Kp *=B_NORM

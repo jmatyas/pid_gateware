@@ -214,7 +214,7 @@ class IIR(Module):
     --/--: signal with a given bit width always includes a sign bit
     -->--: flow is to the right and down unless otherwise indicated
     """
-    def __init__(self, w):
+    def __init__(self, w, addrs, values, words, masks):
         self.widths = w
         for i, j in enumerate(w):
             assert j > 0, (i, j, w)
@@ -261,6 +261,22 @@ class IIR(Module):
         # iteration done, the next iteration can be started
         self.done = Signal()
 
+
+
+        self.start_coeff = Signal()
+
+        self.reading = Signal()
+        self.writing = Signal()
+        self.calculating = Signal()
+        self.done_writing = Signal()
+        coeff_no = Signal(max=len(addrs))
+        
+        val = Array(Signal(2*w.coeff) for i in range(len(addrs)))
+
+        mem = self.m_coeff.get_port(write_capable = True, async_read = True)
+        self.specials += mem
+
+
         ###
 
         # pivot arrays for muxing
@@ -276,7 +292,35 @@ class IIR(Module):
         self.submodules.fsm = fsm = FSM("IDLE")
         state_clr = Signal()
         stage_en = Signal()
+        
+
         fsm.act("IDLE",
+                # self.done.eq(1),
+                state_clr.eq(1),
+                If(self.start_coeff,
+                    If(~self.done_writing,
+                        NextState("READ")
+                    )
+                )
+        )
+        fsm.act("READ",
+                self.reading.eq(1),
+                NextState("CALCULATE"),
+        )
+        fsm.act("CALCULATE",
+                self.calculating.eq(1),
+                NextState("WRITE"),
+        )
+        fsm.act("WRITE",
+                self.writing.eq(1),
+                mem.we.eq(1),
+                If((coeff_no == len(addrs) - 1),
+                    NextState("IDLE2"),
+                ).Else(
+                    NextState("READ")
+                )
+        )
+        fsm.act("IDLE2",
                 self.done.eq(1),
                 state_clr.eq(1),
                 If(self.start,
@@ -303,10 +347,46 @@ class IIR(Module):
         fsm.act("SHIFT",
                 self.shifting.eq(1),
                 If(state == (2 << w.channel) - 1,
-                    NextState("IDLE")
+                    NextState("IDLE2")
                 )
         )
 
+        self.comb += [
+            If(self.reading, 
+                mem.adr.eq(addrs[coeff_no])
+            ).Elif(self.writing,
+                mem.adr.eq(addrs[coeff_no]),
+                mem.dat_w.eq(val[coeff_no])
+            ),
+        ]
+
+        self.sync += [
+            If(self.reading,
+                val[coeff_no].eq(mem.dat_r)
+            ),
+            # If(~self.writing,
+            #     mem.we.eq(0)
+            # ),
+            If(self.calculating,
+                If(words[coeff_no],
+                    val[coeff_no].eq((val[coeff_no] & masks[coeff_no]) | ((values[coeff_no] & masks[coeff_no]) << w.coeff))
+                ).Else(
+                    val[coeff_no].eq((values[coeff_no] & masks[coeff_no]) | (val[coeff_no] & (masks[coeff_no] << w.coeff)))
+                )
+            ),
+            If(fsm.ongoing("WRITE"),
+                If( not (coeff_no == len(addrs) - 1),
+                    coeff_no.eq(coeff_no+1)
+                ).Else(
+                    coeff_no.eq(0),
+                ),
+                If(coeff_no == len(addrs) - 1,
+                    self.done_writing.eq(1)
+                )
+            ),
+        ]
+        
+        
         self.sync += [
                 state.eq(state + 1),
                 If(state_clr,

@@ -1,6 +1,8 @@
 from migen import *
 
-class Cos(Module):
+bit_len = 8
+
+class RW_Mem(Module):
     def __init__(self, addrs, values, words, masks):
 
         self.start = Signal()
@@ -10,16 +12,12 @@ class Cos(Module):
         self.calculating = Signal()
         self.done_writing = Signal()
 
-        val = Array(Signal(2*8) for i in range(4))
+        val = Array(Signal(2*bit_len) for i in range(len(addrs)))
 
-        cnt = Signal(max =len(addrs))
-        cnt_done = Signal()
-        cnt_load = Signal(max = len(addrs))
-
-        no = Signal(max=len(addrs))
+        coeff_no = Signal(max=len(addrs))
 
 
-        self.specials.mem = Memory(width=2*8, depth=4)# << iir_p.profile + iir_p.channel)
+        self.specials.mem = Memory(width=2*bit_len, depth=10)# << iir_p.profile + iir_p.channel)
 
         mem = self.mem.get_port(write_capable = True, async_read = True)
 
@@ -31,99 +29,72 @@ class Cos(Module):
             If(self.start,
                 If(~self.done_writing,
                     NextState("READ"), 
-                    cnt_load.eq(len(addrs) - 1),
                 )
             )
         )
-
         fsm.act("READ",
             self.reading.eq(1),
-            If(cnt_done,
-                NextState("CALCULATE"),
-                cnt_load.eq(len(addrs) - 1)
-            )
+            NextState("CALCULATE"),
         )
-
         fsm.act("CALCULATE",
             self.calculating.eq(1),
-            If(cnt_done,
-                NextState("WRITE"),
-                cnt_load.eq(len(addrs) - 1),
-            )
+            NextState("WRITE"),
         )
-
         fsm.act("WRITE",
             self.writing.eq(1),
             mem.we.eq(1),
-            If(cnt_done,
-                NextState("IDLE")
+            If((coeff_no == len(addrs) - 1),
+                NextState("IDLE"),
+            ).Else(
+                NextState("READ")
             )
         )
 
-        # self.sync += [
-        #     # If(self.reading,
-        #     #     val[no].eq(mem.dat_r)
-        #     # ),
-        #     # If(fsm.before_leaving("WRITE"),
-        #     #     self.done_writing.eq(1)
-        #     # )
-        #     # If(self.writing,
-        #     #     mem.dat_w.eq(val[no])
-        #     # )
-        # ]
-        
         self.comb += [
-            cnt_done.eq(cnt == 0),
-
             If(self.reading, 
-                mem.adr.eq(addrs[no])
+                mem.adr.eq(addrs[coeff_no])
             ).Elif(self.writing,
-                mem.adr.eq(addrs[no]),
-                mem.dat_w.eq(val[no])
+                mem.adr.eq(addrs[coeff_no]),
+                mem.dat_w.eq(val[coeff_no])
             ),
         ]
 
         self.sync += [
-            If(cnt_done,
-                If(cnt_load,
-                    cnt.eq(cnt_load)
-                )
-            ).Else(
-                cnt.eq(cnt - 1)
-            ),
             If(self.reading,
-                no.eq(no + 1),
-                val[no].eq(mem.dat_r)
+                val[coeff_no].eq(mem.dat_r)
             ),
-            If(self.calculating,
-                no.eq(no+1)
-            ),
-            If(self.writing,
-                no.eq(no+1),
-            ).Else(
+            If(~self.writing,
                 mem.we.eq(0)
             ),
             If(self.calculating,
-                If(words[no],
-                    val[no].eq((val[no] & masks[no]) | ((values[no] & masks[no]) << 8))
+                If(words[coeff_no],
+                    val[coeff_no].eq((val[coeff_no] & masks[coeff_no]) | ((values[coeff_no] & masks[coeff_no]) << bit_len))
                 ).Else(
-                    val[no].eq((values[no] & masks[no]) | (val[no] & (masks[no] << 8)))
+                    val[coeff_no].eq((values[coeff_no] & masks[coeff_no]) | (val[coeff_no] & (masks[coeff_no] << bit_len)))
                 )
             ),
-            If(fsm.before_leaving("WRITE"),
-                self.done_writing.eq(1)
-            )
-
+            If(fsm.ongoing("WRITE"),
+                If( not (coeff_no == len(addrs) - 1),
+                    coeff_no.eq(coeff_no+1)
+                ).Else(
+                    coeff_no.eq(0),
+                ),
+                If(coeff_no == len(addrs) - 1,
+                    self.done_writing.eq(1)
+                )
+            ),
         ]
 
 
     
     
     def test(self):
-        yield self.mem[0].eq(0x50AB)
-        yield self.mem[1].eq(0xAA09)
-        yield self.mem[2].eq(0x00CF)
-        yield self.mem[3].eq(0xEFDC)
+        yield self.mem[0].eq(0x1BAB)
+        yield self.mem[5].eq(0xAA09)
+        yield self.mem[7].eq(0x00CF)
+        yield self.mem[1].eq(0xEFDC)
+        yield self.mem[1].eq(0xA00A)
+        yield self.mem[2].eq(0x0980)
 
         # for i in range (1,4):
         #     yield self.mem[i].eq(i**3+3)
@@ -132,33 +103,53 @@ class Cos(Module):
             yield
 
 if __name__ == "__main__":
-    # iir_p = iir_p = IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
-    #         accu=48, shift=11, channel=2, profile=1)
-
-    # iir = IIR(iir_p)
     
     channel = 0
     profile = 0
     
-    addrs = Array(Signal(max = 4) for i in range(4))
-    values = Array(Signal(2*8) for i in range(4))
-    words = Array(Signal() for i in range(4))
-    masks = Array(Signal(8) for i in range (4))
+    length = 8
+    addrs = Array(Signal(max = 10) for i in range(length))
+    values = Array(Signal(bit_len) for i in range(length))
+    words = Array(Signal() for i in range(length))
+    masks = Array(Signal(bit_len) for i in range (length))
 
     # a1, b0, b1 = coeff_to_mu(Kp = 1, Ki = 0)
 
-    m = Cos(addrs, values, words, masks)
+    m = RW_Mem(addrs, values, words, masks)
 
-    # # m.comb += [
-    # #     addr[0].eq(0),
-    # #     addr[1].eq(1),
-    # #     addr[2].eq(2),
-    # #     addr[3].eq(3),
-    # #     values[0].eq(5),
-    # #     values[1].eq(10),
-    # #     values[2].eq(0xF),
-    # #     values[3].eq(0xAB)
-    # # ]
+    m.comb += [
+        addrs[0].eq(0),      # ftw1
+        addrs[1].eq(0),      # b1
+        addrs[2].eq(5),      # pow
+        addrs[3].eq(5),      # cfg
+        addrs[4].eq(7),      # offset
+        addrs[5].eq(7),      # a1
+        addrs[6].eq(1),      # ftw0
+        addrs[7].eq(1),      # b0
+
+        values[0].eq(0x5A),
+        values[1].eq(10),
+        values[2].eq(0xF),
+        values[3].eq(0xAB),
+        values[4].eq(5),
+        values[5].eq(10),
+        values[6].eq(0xF),
+        values[7].eq(0xAB),
+
+        words[0].eq(0),
+        words[1].eq(1),
+        words[2].eq(0),
+        words[3].eq(1),
+        words[4].eq(0),
+        words[5].eq(1),
+        words[6].eq(0),
+        words[7].eq(1),
+    
+    ]
+
+
+    for i in range(length):
+        m.comb += masks[i].eq(0xFF)
 
     # coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
     #     a1=a1, b0=b0, b1=b1, cfg=0 | (0 << 3))
@@ -169,34 +160,9 @@ if __name__ == "__main__":
     #         # self.set_coeff(self.channel, value=coeff[k],
     #         #     profile=self.profile, coeff=k)
 
-    word = 1
-    addr = 2
-    mask = 4
-
-    # word, addr, mask = iir._coeff(channel, profile, "a1")
-    # print(word, addr, mask)
-    m.comb += addrs[0].eq(2), words[0].eq(word), masks[0].eq(0xFFFF)
-
-    m.comb += addrs[1].eq(1), addrs[2].eq(0), addrs[3].eq(3), values[0].eq(0x88), values[2].eq(0x2020)
-
-    m.comb += masks[1].eq(0xFFFF), masks[2].eq(0xFFFF), masks[3].eq(0xFFFF)
-        
-        
-        #     w = iir.widths
-        #     val = Signal(2*w.coeff)
-        # # # val - data read from memory
-        # # # value - data to set
-        # # self.sync += val.eq(self.iir.m_coeff[addr])
-        # if word:
-        #     self.comb += val.eq((val & mask) | ((value & mask) << w.coeff))
-        # else:
-        #     self.comb += val.eq((value & mask) | (val & (mask << w.coeff)))
-
-        # # self.sync += self.iir.m_coeff[addr].eq(val)
-
-
-
-
+    # for i in range(4):
+    #     m.comb += addrs[i].eq(i), masks[i].eq(0xFFFF), words[i].eq(i//2)    
+    
     m.comb += m.start.eq(1)
     run_simulation(m, m.test(), vcd_name="test.vcd")
 
