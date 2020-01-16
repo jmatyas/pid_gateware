@@ -45,7 +45,7 @@ class Servo(Module):
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
         # if ch_no is None:
-        t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1)
+        t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1 + 4000)
         # else:
         #     t_dac = dac_p.data_width*2*dac_p.clk_width + 6 + 2
 

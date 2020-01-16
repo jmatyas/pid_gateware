@@ -10,7 +10,9 @@ PGIAParams = namedtuple("PGIAParams", [
 
 class PGIA(Module):
     def __init__(self, pads, params, gain_vector):
-        
+        # self.clock_domains.cd_sys = ClockDomain()
+
+
         # gain_vector - to set PGIA registers appropriately:
         # 00 - gain of 1 (with Sammpler +/- 10V)
         # 01 - gain of 10 (with Sampler +/- 1V)
