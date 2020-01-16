@@ -29,6 +29,9 @@ class SPI2(Module):
 
         data_load = Signal()
 
+        sync_cnt = Signal(max = 6)
+        sync_cnt_done = Signal()
+        sync_cnt_load = Signal()
         
         ###
 
@@ -41,6 +44,17 @@ class SPI2(Module):
                 clk_counter.eq(params.clk_width - 1),
             ).Else(
                 clk_counter.eq(clk_counter-1)
+            )
+        ]
+
+        self.comb += sync_cnt_done.eq(sync_cnt == 0)
+        self.sync += [
+            If(sync_cnt_done, 
+                If(sync_cnt_load,
+                    sync_cnt.eq(5)
+                )
+            ).Else(
+                sync_cnt.eq(sync_cnt - 1)
             )
         ]
         
@@ -58,6 +72,7 @@ class SPI2(Module):
             If(self.spi_start,
                 NextState("SYNCR_DELAY"),
                 data_load.eq(1),         # signalling to latch the input data in the shift register
+                
             )
         )
 

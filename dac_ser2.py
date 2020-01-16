@@ -12,6 +12,12 @@ AD53XX_SPECIAL_OFS1 = 3 << 16
 ZOTINO_OFFSET = 8192
 # AD53XX_CMD_OFFSET = 2<<22
 AD53XX_CMD_SPECIAL = 0 << 22
+init_val = ((AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 & 0x3FFF)))
+print(init_val)
+print('{:b}'.format(init_val))
+print(len('{:b}'.format(init_val)))
+print('{:x}'.format(init_val))
+
 
 class DAC(spi2.SPI2):
     def __init__(self, pads, params):
@@ -47,21 +53,37 @@ class DAC(spi2.SPI2):
         current_spi = Signal()
         old_spi = Signal()
         
+        dac_cnt = Signal(max=15)
+        dac_cnt_done = Signal()
+        dac_cnt_load = Signal()
 
         ###
+
+        self.comb += dac_cnt_done.eq(dac_cnt == 0)
+        self.sync += [
+            If(dac_cnt_done,
+                If(dac_cnt_load,
+                    dac_cnt.eq(14)
+                )
+            ).Else(
+                dac_cnt.eq(dac_cnt - 1)
+            )
+        ]
 
         self.submodules.fsm_dac = fsm_dac = FSM("IDLE")
 
         fsm_dac.act("IDLE",
+            # pads.ldac.eq(0),
             self.dac_ready.eq(1),       # when in IDLE, device is ready to accept new data
             # if controller issues dac_init and devices has not yet been initialized, 
             # whith next rising edge initailizing sequence is latched into //single_word// vector 
             # and spi communication is began
             If(self.dac_init & ~self.initialized,
-                NextValue(single_word, (AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 &0x3FFF))),
+                NextValue(single_word, (AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 & 0x3FFF))),
                 NextValue(self.spi_start, 1),
                 NextState("INIT"),
-                NextValue(pads.ldac, 1)
+                NextValue(pads.ldac, 1),
+                dac_cnt_load.eq(1)
 
             # if controller issues a start event, a number of words is latched into the counter and data 
             # from //profiles// is calculated and latched also
@@ -77,10 +99,14 @@ class DAC(spi2.SPI2):
             If(self.fsm.ce,
                 NextValue(self.spi_start, 0),            
             ),
-            # if //spi_ready// changes its state to HIGH, device may be considered initialized
-            If(((~old_spi) & current_spi),
-                NextValue(self.initialized, 1),
-                NextState("IDLE")
+            If(dac_cnt_done,
+                # if //spi_ready// changes its state to HIGH, device may be considered initialized
+                If(((~old_spi) & current_spi),
+                    NextValue(self.initialized, 1),
+                    NextState("IDLE")
+                )
+            ).Else(
+                NextState("INIT")
             )
         )
 

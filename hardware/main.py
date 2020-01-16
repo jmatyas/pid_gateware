@@ -63,4 +63,4 @@ m.specials += [
     Instance("BUFG", i_I = clk_signal, o_O = m.cd_sys.clk)
 ]
 
-plat.build(m, run=True, build_dir = "building/servo/2ch_kp1_z_forem_30us_lag", build_name = "top")
+plat.build(m, run=True, build_dir = "building/servo/2ch_kp1_z_forem_30us_lag_with_offset/pgia0000", build_name = "top")

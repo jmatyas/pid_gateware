@@ -26,7 +26,7 @@ class Servo(Module):
         words = Array(Signal() for i in range(length))
         masks = Array(Signal(iir_p.coeff) for i in range (length))
 
-        a1, b0, b1 = coeff_to_mu(Kp = 1, Ki = 0)
+        a1, b0, b1 = coeff_to_mu(Kp = 2, Ki = 0)
         
         self.submodules.adc = ADC(adc_pads, adc_p)
         self.submodules.iir = IIR(iir_p, addrs, values, words, masks)
@@ -49,8 +49,9 @@ class Servo(Module):
         # else:
         #     t_dac = dac_p.data_width*2*dac_p.clk_width + 6 + 2
 
-        # print(t_adc, t_iir, t_dac)
+        print(t_adc, t_iir, t_dac)
         self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
+        print(t_cycle)
 
 
         T_CYCLE = self.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
@@ -86,11 +87,23 @@ class Servo(Module):
         ]
         
 
+        start_cnt = Signal(max=100)
+        start_done = Signal()
+
+
+        self.comb += start_done.eq(start_cnt == 100)
+        self.sync += [
+            If(~start_done,
+                start_cnt.eq(start_cnt + 1)
+            ) 
+        ]
+
+
         self.comb += [
             cnt_done.eq(cnt == 0),
-            self.dac.dac_init.eq(self.start & ~self.dac.initialized),
-            self.pgia.start.eq(self.start & ~self.pgia.initialized),
-            self.iir.start_coeff.eq(self.start & ~self.iir.done_writing),
+            self.dac.dac_init.eq(self.start & ~self.dac.initialized & start_done),
+            self.pgia.start.eq(self.start & ~self.pgia.initialized & start_done),
+            self.iir.start_coeff.eq(self.start & ~self.iir.done_writing & start_done),
             self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized & self.iir.done_writing),
             self.iir.start.eq(active[0] & self.adc.done),
             self.dac.dac_start.eq(active[1] & (self.iir.shifting | self.iir.done)),
@@ -107,7 +120,7 @@ class Servo(Module):
         for ix in range(adc_p.channels):
             ch = ix
             adc = ix
-            coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
+            coeff = dict(pow=0x0000, offset=0x8000, ftw0=0x1727, ftw1=0x1929,
                 a1=a1, b0=b0, b1=b1, cfg = adc | (0 << 3))
 
             for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
