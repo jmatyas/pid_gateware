@@ -94,6 +94,7 @@ class PGIA(Module):
         # PGIA is needed only once during servo operation - to initalize the PGIA registers with 
         # given values, it is therefore allowed to not being able to use this module again
         fsm.act("END",
+            pads.rclk.eq(1),
             self.initialized.eq(1)
         )
 

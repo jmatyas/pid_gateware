@@ -8,7 +8,7 @@ from artiq.language.units import us, ns
 AD53XX_CMD_OFFSET = 2 << 22
 AD53XX_SPECIAL_OFS0 = 2 << 16
 
-start_delay = 5         # it has to be an odd number, becuase of synchronisation of spi clock and top clock
+start_delay = 4
 
 class TB(Module):
     def __init__(self, params):
@@ -25,71 +25,75 @@ class SPISim(SPI2):
         self.spi_p = spi_p = SPIParams(channels=2, data_width = 24, 
             clk_width = 2)
 
-        t_cycle =  (spi_p.data_width*2*spi_p.clk_width + 3) + 1 + 2 # +3 is a delay introduced by FSM, + 1 for the start to last one cycle longer,
-        #  and +2 to make sure that SYNCR is high during IDLE long enough (due to the spi clock being two times slower, only multiples of 2 affects FSM's state
-        # and syncr being high)
+        # +3 in t_cycle is needed to delay driving SYNCR line low - it needs to be at least 20 ns wide
+        # which with 8 ns of Kasli clock is 3 clock cycles. To ensure that IC accepts SYNCR, it is driven high
+        # for 4 clock cycles - 32 ns
+        t_cycle =  (spi_p.data_width*2*spi_p.clk_width + 1) + 3 
         print(t_cycle)
         print(t_cycle* 8*ns)
         self.submodules.spi_tb = TB(spi_p)
         
         self.submodules.spi = SPI2(self.spi_tb, spi_p)
-
+        
+        self.sim_start = Signal()
 
         cnt_done = Signal()
-        cnt = Signal(max=t_cycle + 1)
+        cnt = Signal(max=t_cycle)
         load_cnt = Signal()
-
-        assert start_delay <= 50 - 3
-        start_cnt = Signal(max=50 + 1, reset = start_delay + 3)
+        
+        assert start_delay <= 50
+        start_cnt = Signal(max=50 + 1, reset = start_delay)
         start_done = Signal()
 
-        self.comb += [
-             cnt_done.eq(cnt == 0), 
-             start_done.eq((start_cnt == 2) | (start_cnt == 1) | (start_cnt == 0))
-        ]
+        # DZIALA z opoznianiem!!!!!
+        # ---------------------------
+        # # assert start_delay <= 50 - 3
+        # # start_cnt = Signal(max=50 + 1, reset = start_delay + 3)
+        # # start_done = Signal()
 
+        # # self.comb += [
+        # #      cnt_done.eq(cnt == 0), 
+        # #      start_done.eq((start_cnt == 2) | (start_cnt == 1) | (start_cnt == 0))
+        # # ]
+
+        # # self.sync += [
+        # #     If(start_done,
+        # #         If(cnt_done,
+        # #             If(load_cnt,
+        # #                 cnt.eq(t_cycle - 1)
+        # #             )
+        # #         ).Else(
+        # #             cnt.eq(cnt - 1)
+        # #         ),
+        # #     ).Else(
+        # #         start_cnt.eq(start_cnt - 1)
+        # #     ) 
+        # # ]
+        # # self.comb += self.spi.spi_start.eq(((cnt == 1) | (cnt_done)) & start_done), load_cnt.eq(self.spi.spi_start)
+        
+        self.comb += cnt_done.eq(cnt == 0), start_done.eq(start_cnt == 0)
         self.sync += [
-            If(start_done,
-                If(cnt_done,
-                    If(load_cnt,
-                        cnt.eq(t_cycle - 1)
-                    )
-                ).Else(
-                    cnt.eq(cnt - 1)
-                ),
+            If(cnt_done,
+                If(load_cnt,
+                    cnt.eq(t_cycle - 1)
+                )
             ).Else(
+                cnt.eq(cnt - 1)
+            ),
+            If(~start_done,
                 start_cnt.eq(start_cnt - 1)
-            ) 
+            )
         ]
-        self.comb += self.spi.spi_start.eq(((cnt == 1) | (cnt_done)) & start_done), load_cnt.eq(self.spi.spi_start)
+        self.comb += self.spi.spi_start.eq(cnt_done & start_done), load_cnt.eq(self.spi.spi_start)
 
-        # self.input1 = Signal(spi_p.data_width)
-        # self.input2 = Signal(spi_p.data_width)
-
-        # self.comb+= [
-        #     If(self.spi.init_latch,
-        #         self.spi_tb.ldac.eq(1), self.spi_tb.clr.eq(1),
-        #         self.spi.dataSPI.eq(self.input1)
-        #     ).Else(
-        #         self.spi_tb.ldac.eq(0), self.spi_tb.clr.eq(1),
-        #         self.spi.dataSPI.eq(self.input2)
-        #     )
-        # ]
-
-        # self.comb += [
-        #     # self.spi.init.eq(~self.spi.initialized & self.begin),
-        #     self.spi.spi_start.eq(self.begin & self.spi.spi_ready),
-        #     self.done.eq(self.spi.spi_ready)
-        # ]
-    
     def test(self):
         dut = self.spi
 
         # yield dut.spi_start.eq(1)
-        yield dut.dataSPI.eq(0x9)
+        yield dut.dataSPI.eq(0xF009)
         for i in range(start_delay + 3):
             yield
-        yield dut.dataSPI.eq(0xAA9)
+        yield dut.dataSPI.eq(0xA79)
         # yield dut.spi_start.eq(0)
 
         while not (yield dut.spi_ready):

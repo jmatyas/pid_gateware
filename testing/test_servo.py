@@ -7,13 +7,18 @@ from math import log2, ceil
 from migen import *
 from migen.genlib import io
 
-from artiq.gateware.szservo.testing import test_adc, test_dac2, test_pgia
+from artiq.gateware.szservo.testing import test_adc, test_dac3, test_pgia
 from artiq.gateware.szservo import servo
+
+channels_no = 8
+
+Kps = [1 for i in range(channels_no)]
+Kis = [0 for i in range(channels_no)]
 
 
 class ServoSim(servo.Servo):
     def __init__(self):
-        adc_p = servo.ADCParams(width=16, channels=2, lanes=1,
+        adc_p = servo.ADCParams(width=16, channels=channels_no, lanes=int(channels_no/2),
                 t_cnvh=4, t_conv=57 - 4, t_rtt=4 + 4)
         iir_p = servo.IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
                 accu=48, shift=11, channel=ceil(log2(adc_p.channels)), profile=1)
@@ -22,12 +27,12 @@ class ServoSim(servo.Servo):
 
         pgia_p = servo.PGIAParams(data_width = 16, clk_width = 2)
         self.submodules.adc_tb = test_adc.TB(adc_p)
-        self.submodules.dac_tb = test_dac2.TB(self.dac_p)
+        self.submodules.dac_tb = test_dac3.TB(self.dac_p)
 
         self.submodules.pgia_tb = test_pgia.TB(pgia_p)
 
         servo.Servo.__init__(self, self.adc_tb, self.pgia_tb, self.dac_tb,
-                adc_p, pgia_p, iir_p, self.dac_p, 0x5555)
+                adc_p, pgia_p, iir_p, self.dac_p, 0x5555, Kps, Kis)
         
         # self.channel = channel = 0
         # self.adc = adc = 0
@@ -204,7 +209,7 @@ class ServoSim(servo.Servo):
 
 def main():
     servo = ServoSim()
-    run_simulation(servo, servo.test(), vcd_name="servo.vcd",
+    run_simulation(servo, servo.test(), vcd_name="servo_dac3.vcd",
             clocks={
                 "sys":   (8, 0),
                 "adc":   (8, 0),

@@ -1,7 +1,7 @@
 from migen import *
 
 from artiq.gateware.szservo.adc_ser import ADC, ADCParams
-from artiq.gateware.szservo.dac_ser2 import DAC, DACParams
+from artiq.gateware.szservo.dac_ser3 import DAC, DACParams
 from artiq.gateware.szservo.iir import IIR, IIRWidths
 from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.language.units import us, ns
@@ -13,11 +13,11 @@ A_NORM = 1 << COEFF_SHIFT
 COEFF_width = 18
 COEFF_MAX = 1 << COEFF_width - 1
 
-start_delay = 5
+start_delay = 4
 
 
 class Servo(Module):
-    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val):
+    def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val, Kps, Kis):
         self.clock_domains.cd_sys = ClockDomain()
         
         length = adc_p.channels*8
@@ -44,7 +44,7 @@ class Servo(Module):
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
 
-        t_dac_1ch = (dac_p.data_width*2*dac_p.clk_width + 3 + 1 + 2)
+        t_dac_1ch = (dac_p.data_width*2*dac_p.clk_width + 3 + 1)
         
         # 8ns - 1 clock cycle, DAC needs about 34.5 us to settle, hence 34.5us/8ns = number of cycles
         t_dac = t_dac_1ch * dac_p.channels + 1 
@@ -101,7 +101,7 @@ class Servo(Module):
         start_done = Signal()
 
         self.comb += [
-             start_done.eq((start_cnt == 2) | (start_cnt == 1) | (start_cnt == 0))
+             start_done.eq(start_cnt == 0)
         ]
 
         self.sync += [
@@ -125,16 +125,16 @@ class Servo(Module):
         ]
 
 
-        Kps = [1 for i in range(adc_p.channels)]
-        Kis = [0 for i in range(adc_p.channels)]
+        # Kps = [1 for i in range(adc_p.channels)]
+        # Kis = [0 for i in range(adc_p.channels)]
         # Kis = [0 for i in range(adc_p.channels)]
         coeff_list = [[] for j in range(len(Kps))]
 
         assert len(coeff_list) == adc_p.channels
 
         for idx, (i, j) in enumerate(zip (Kps, Kis)):
-            coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
-        
+            coeff_list[idx] = coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
+            print(coeff_list[idx])
 
 
         # # self.channel = channel = 1
