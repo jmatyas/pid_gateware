@@ -4,8 +4,15 @@ import unittest
 from migen import *
 
 from artiq.gateware.szservo.dac_ser2 import DAC, DACParams
+from artiq.language.units import us, ns
 
-t_busy = 188    # 188 * 8ns = 1.5us; 8 ns when sys_clk=125MHz
+
+start_delay = 5
+dac_p = DACParams(channels=8, data_width = 24, 
+    clk_width = 2)
+
+t_cycle =  (dac_p.data_width*2*dac_p.clk_width + 3 + 1 + 2)*dac_p.channels + 1
+
 
 class TB(Module):
     def __init__(self, dac_p):
@@ -15,83 +22,86 @@ class TB(Module):
         self.ldac = Signal(reset = 1)
         # self.busy = Signal(reset = 1)
         self.syncr = Signal(reset = 1)
-        # self.clr = Signal()
+        self.clr = Signal()
 
 
 
-def main():
-    dac_p = DACParams(channels=8, data_width = 24, 
-        clk_width = 2)
-    ch_no = None
-    tb = TB(dac_p)
-    dac = DAC(tb, dac_p)
-    tb.submodules += dac
+class DACSim(DAC):
+    def __init__(self):
+    
+        self.submodules.dac_tb = TB(dac_p)
+    
+        self.submodules.dac = DAC(self.dac_tb, dac_p)
 
-    # t_cycle =  (dac_p.data_width*2*dac_p.clk_width + 6)*2
-    # else:
-    t_cycle =  (dac_p.data_width*2*dac_p.clk_width + 6)*dac_p.channels + 1
+        cnt_done = Signal()
+        cnt = Signal(max=t_cycle + 1)
+        load_cnt = Signal()
 
-    tb_cnt_done = Signal()
-    tb_cnt = Signal(max=t_cycle + 1)
-    load_cnt = Signal()
+        assert start_delay <= 50 - 3
+        start_cnt = Signal(max=50 + 1, reset = start_delay + 3)
+        start_done = Signal()
 
-    tb.comb += tb_cnt_done.eq(tb_cnt == 0)
-    tb.sync += [
-        If(tb_cnt_done,
-            If(load_cnt,
-                tb_cnt.eq(t_cycle - 1)
-            )
-        ).Else(
-            tb_cnt.eq(tb_cnt - 1)
-        )
-    ]
+        self.comb += [
+             cnt_done.eq(cnt == 0), 
 
-    tb.comb += [
-            dac.dac_init.eq(~dac.initialized),
-            dac.dac_start.eq(dac.initialized & (tb_cnt_done | (tb_cnt == t_cycle - 1))),#  | (tb_cnt == t_cycle - 2))),
-            load_cnt.eq(dac.dac_start),
+             start_done.eq((start_cnt == 2) | (start_cnt == 1) | (start_cnt == 0))
         ]
-        
 
+        self.sync += [
+            If(start_done,
+                If(cnt_done,
+                    If(load_cnt,
+                        cnt.eq(t_cycle - 1)
+                    )
+                ).Else(
+                    cnt.eq(cnt - 1)
+                ),
+            ).Else(
+                start_cnt.eq(start_cnt - 1)
+            ) 
+        ]
 
+        self.comb += [
+            self.dac.dac_init.eq(~self.dac.initialized & ((cnt == 1) | (cnt_done)) & start_done),
+            self.dac.dac_start.eq(self.dac.initialized & (cnt_done | (cnt == 1))),
+            load_cnt.eq(self.dac.dac_start),
+        ]
 
-    def run(tb):
-        dut = dac
+    def test(self):
+        dut = self.dac
         prof0 =0x90CB000000008FF1
         prof1 = 0xA011000000008FF1
         
+
         for i in range (dac_p.channels):
             yield dut.profile[i].eq(prof0 + 0x2000000000000000*i)
 
+        for i in range(start_delay + 3):
+            yield
 
-        # yield dac.dac_init.eq(1)
-        yield
-        yield
-        # yield dac.dac_init.eq(0)
-        while not (yield dac.initialized):
+        while not (yield dut.initialized):
             yield
         yield
-        # yield dac.dac_start.eq(1)
         yield
         yield
-        # yield dac.dac_start.eq(0)
-        while not (yield dac.dac_ready):
+        while not (yield dut.dac_ready):
             yield
         yield
+
         for i in range(100):
-            yield
+            yield        
 
-
-              
-       
-    run_simulation(tb, run(tb), vcd_name = "dac_next.vcd")
+def main():
+    dac = DACSim()
+    run_simulation(dac, dac.test(), vcd_name = "dac_next.vcd")
 
     
-
-class DACTest(unittest.TestCase):
-    def test_run(self):
-        main()
-
 if __name__ == "__main__":
+    print(t_cycle)
+    print(t_cycle*8*ns)
+
+    print((t_cycle - 1)/dac_p.channels)
+    print(((t_cycle - 1)/dac_p.channels)*8*ns)    
+
     logging.basicConfig(level=logging.DEBUG)
     main()

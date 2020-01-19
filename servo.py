@@ -7,14 +7,14 @@ from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.language.units import us, ns
 
 
-# T_CYCLE = Servo.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
 COEFF_SHIFT = 11
 B_NORM = 1 << COEFF_SHIFT + 1
 A_NORM = 1 << COEFF_SHIFT
 COEFF_width = 18
 COEFF_MAX = 1 << COEFF_width - 1
 
-t_dac_busy = 188    # 188 * 8ns = 1.5us; 8 ns when sys_clk=125MHz
+start_delay = 5
+
 
 class Servo(Module):
     def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val):
@@ -25,8 +25,7 @@ class Servo(Module):
         values = Array(Signal(iir_p.coeff) for i in range(length))
         words = Array(Signal() for i in range(length))
         masks = Array(Signal(iir_p.coeff) for i in range (length))
-
-        a1, b0, b1 = coeff_to_mu(Kp = 2, Ki = 0)
+            
         
         self.submodules.adc = ADC(adc_pads, adc_p)
         self.submodules.iir = IIR(iir_p, addrs, values, words, masks)
@@ -44,23 +43,33 @@ class Servo(Module):
         t_adc = (adc_p.t_cnvh + adc_p.t_conv + adc_p.t_rtt +
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
-        # if ch_no is None:
-        t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1 + 4000)
-        # else:
-        #     t_dac = dac_p.data_width*2*dac_p.clk_width + 6 + 2
 
-        print(t_adc, t_iir, t_dac)
-        self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
-        print(t_cycle)
+        t_dac_1ch = (dac_p.data_width*2*dac_p.clk_width + 3 + 1 + 2)
+        
+        # 8ns - 1 clock cycle, DAC needs about 34.5 us to settle, hence 34.5us/8ns = number of cycles
+        t_dac = t_dac_1ch * dac_p.channels + 1 
+        # t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1 + 4313) 
 
 
+# ROZKMINIC TO - ILE CZASU!!!!
+        # print(t_adc, t_iir, t_dac, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch)*dac_p.channels)
+        # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch)*dac_p.channels)
+        # print(t_cycle)
+
+        # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch * dac_p.channels))
+        if (4313 - (t_adc + t_iir + t_dac) < 0):
+            self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
+        else:
+            self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac))
+
+        print(t_adc, t_iir, t_dac_1ch, t_dac_1ch*dac_p.channels, t_cycle, 4313 - (t_adc + t_iir + t_dac))
         T_CYCLE = self.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
 
         self.start = Signal()
         self.done = Signal()
 
-        t_restart = t_cycle - t_adc + 1
-
+        t_restart = t_cycle - t_adc - t_iir - t_dac + 1
+        print(t_restart)
         cnt = Signal(max = t_restart)
         cnt_done = Signal()
         active = Signal(3)
@@ -87,14 +96,17 @@ class Servo(Module):
         ]
         
 
-        start_cnt = Signal(max=100)
+        assert start_delay <= 50 - 3
+        start_cnt = Signal(max=50 + 1, reset = start_delay + 3)
         start_done = Signal()
 
+        self.comb += [
+             start_done.eq((start_cnt == 2) | (start_cnt == 1) | (start_cnt == 0))
+        ]
 
-        self.comb += start_done.eq(start_cnt == 100)
         self.sync += [
             If(~start_done,
-                start_cnt.eq(start_cnt + 1)
+                start_cnt.eq(start_cnt - 1)
             ) 
         ]
 
@@ -104,11 +116,25 @@ class Servo(Module):
             self.dac.dac_init.eq(self.start & ~self.dac.initialized & start_done),
             self.pgia.start.eq(self.start & ~self.pgia.initialized & start_done),
             self.iir.start_coeff.eq(self.start & ~self.iir.done_writing & start_done),
+            
             self.adc.start.eq(self.start & cnt_done & self.pgia.initialized & self.dac.initialized & self.iir.done_writing),
             self.iir.start.eq(active[0] & self.adc.done),
             self.dac.dac_start.eq(active[1] & (self.iir.shifting | self.iir.done)),
+            
             self.done.eq(self.dac.dac_ready)
         ]
+
+
+        Kps = [1 for i in range(adc_p.channels)]
+        Kis = [0 for i in range(adc_p.channels)]
+        # Kis = [0 for i in range(adc_p.channels)]
+        coeff_list = [[] for j in range(len(Kps))]
+
+        assert len(coeff_list) == adc_p.channels
+
+        for idx, (i, j) in enumerate(zip (Kps, Kis)):
+            coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
+        
 
 
         # # self.channel = channel = 1
@@ -120,6 +146,7 @@ class Servo(Module):
         for ix in range(adc_p.channels):
             ch = ix
             adc = ix
+            a1, b0, b1 = coeff_list[ix]
             coeff = dict(pow=0x0000, offset=0x8000, ftw0=0x1727, ftw1=0x1929,
                 a1=a1, b0=b0, b1=b1, cfg = adc | (0 << 3))
 
@@ -185,7 +212,7 @@ class Servo(Module):
 #         ]
 
 
-def coeff_to_mu(Kp, Ki):
+def coeff_to_mu(Kp, Ki, T_CYCLE):
     Kp *=B_NORM
     if Ki == 0:
         # pure P
@@ -206,9 +233,32 @@ def coeff_to_mu(Kp, Ki):
             b1 >= COEFF_MAX or b1 < -COEFF_MAX):
         raise ValueError("high gains")
     
-    return a1, b0, b1
+    return [a1, b0, b1]
 
 
 if __name__ == "__main__":
-    print(coeff_to_mu(2, 0))
+    T_CYCLE = 1000*8*ns  # Must match gateware Servo.t_cycle.
+
+
+    Kps = [1 for i in range(8)]
+    Kis = [0 for i in range(8)]
+    # Kis = [0 for i in range(adc_p.channels)]
+    coeff_list = [[] for j in range(len(Kps))]
+
+    # assert len(coeff_list) == adc_p.channels
+
+    for idx, (i, j) in enumerate(zip (Kps, Kis)):
+        coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
         
+
+
+    # Kps = [1, 2, 3]
+    # Kis = [6, 7, 8]
+    # coeff_list = [[] for j in range(len(Kps))]
+    # for idx, (i, j) in enumerate(zip (Kps, Kis)):
+    #     coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j)
+    
+    # a1, b0, b1 = coeff_list[1]
+
+    
+    # print(a1, b0, b1)

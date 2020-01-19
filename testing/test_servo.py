@@ -10,8 +10,6 @@ from migen.genlib import io
 from artiq.gateware.szservo.testing import test_adc, test_dac2, test_pgia
 from artiq.gateware.szservo import servo
 
-ch_no = None
-t_busy = 188
 
 class ServoSim(servo.Servo):
     def __init__(self):
@@ -82,7 +80,7 @@ class ServoSim(servo.Servo):
         # yield from self.test_iter(x0, x1, y1, self.adc, self.channel, self.profile)
         # assert (yield self.done)
         for i in range(1, self.dac_p.channels - 1):
-            x0 = x0+0x0020
+            x0 = x0#+0x0020 + i*i*0x00A0
             x3 = 0x0743
             y3 = 0x1145
 
@@ -93,22 +91,24 @@ class ServoSim(servo.Servo):
         
 
         yield self.start.eq(1)
-        yield from self.init_seq()
+        for i in range(1000):
+            yield
+        # yield from self.init_seq()
        
         
-        # # yield self.start.eq(0)
+        # # # # yield self.start.eq(0)
         
 
-        yield from self.servo_iter()
+        # # yield from self.servo_iter()
 
-        # # yield from self.check_iter(x0, x1, y1)
+        # # # # yield from self.check_iter(x0, x1, y1)
     
 
-        # for i in range(1000):
-        #     yield
-        yield from self.servo_iter()
+        # # # for i in range(1000):
+        # # #     yield
+        # # yield from self.servo_iter()
 
-        # yield from self.check_iter(x0, x1, y1)
+        # # # yield from self.check_iter(x0, x1, y1)
 
 
         

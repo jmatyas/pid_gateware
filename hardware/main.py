@@ -1,12 +1,6 @@
 from migen import *
 from migen.build.platforms.sinara import kasli
 
-# from math import log2, ceil
-
-# from artiq.gateware.szservo.adc_ser import ADC, ADCParams
-# from artiq.gateware.szservo.dac_ser import DAC_init, DAC, DACParams
-# from artiq.gateware.szservo.iir import IIR, IIRWidths
-# from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.gateware.szservo import servo
 from artiq.gateware.szservo.pads import ZotinoPads, SamplerPads, pgiaPads
 from .eem2 import *
@@ -34,7 +28,7 @@ dac_pads = ZotinoPads(plat, dac_eem)
 adc_p = servo.ADCParams(width=16, channels=2, lanes=1,
                 t_cnvh=4, t_conv=57 - 4, t_rtt=4 + 4)
 iir_p = servo.IIRWidths(state=25, coeff=18, adc=16, asf=14, word=16,
-                accu=48, shift=11, channel=4, profile=1)
+                accu=48, shift=11, channel=3, profile=1)
 dac_p = servo.DACParams(data_width = 24, clk_width = 2,
                 channels=adc_p.channels)
 pgia_p = servo.PGIAParams(data_width = 16, clk_width = 2)
@@ -50,8 +44,6 @@ m.submodules += adc_pads, pgia_pads, dac_pads
 m.comb += m.start.eq(1)
 m.comb += [
     [plat.request("user_led").eq(i) for i in [m.dac.initialized, m.pgia.initialized, m.iir.done_writing]]
-    # led2.eq(m.init),
-
 ]
 
 
@@ -63,4 +55,4 @@ m.specials += [
     Instance("BUFG", i_I = clk_signal, o_O = m.cd_sys.clk)
 ]
 
-plat.build(m, run=True, build_dir = "building/servo/2ch_kp1_z_forem_30us_lag_with_offset/pgia0000", build_name = "top")
+plat.build(m, run=True, build_dir = "building/pid/2ch/pgia0000", build_name = "top")
