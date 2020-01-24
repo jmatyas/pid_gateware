@@ -6,12 +6,16 @@ from . import spi2
 
 DACParams = spi2.SPIParams
 
+debug = {("mark_debug", "true")}
+
+
 # values needed for DAC's initialization
 AD53XX_SPECIAL_OFS0 = 2 << 16
 AD53XX_SPECIAL_OFS1 = 3 << 16
 ZOTINO_OFFSET = 8192
 AD53XX_CMD_SPECIAL = 0 << 22
-INIT_VAL = ((AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 & 0x3FFF)))
+# INIT_VAL = ((AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 & 0x3FFF)) << 8)
+INIT_VAL = 0x22000
 
 class DAC(spi2.SPI2):
     def __init__(self, pads, params):
@@ -22,7 +26,7 @@ class DAC(spi2.SPI2):
         # transmission to one channel - there are 3 cycles of delay needed by IC - it allows the SYNCR pin to be high for at least 
         # 4 clock cycles - 4*8ns = 32 ns
 
-        self.profile =[Signal(32 + 16 + 16, reset_less=True)    # 64 bit wide data delivered to dac
+        self.profile =[Signal(32 + 16 + 16, reset_less=True, name_override="profile{}".format(i), attr=debug)    # 64 bit wide data delivered to dac
             for i in range(params.channels)]
 
         self.dac_ready = Signal()           # output signal - it lets the controller know that it's transmitted all the data
@@ -31,7 +35,8 @@ class DAC(spi2.SPI2):
 
         self.initialized = Signal()
 
-        data = [Signal(16) 
+        temp = [Signal(16) for i in range (params.channels)]
+        data = [Signal(16, name_override="data_dac_{}".format(i), attr=debug) 
             for i in range(params.channels)]        # 16-bit-wide data to be transferred to DAC (ASF from profile + "00")
 
         mode = Signal (2)           # 2-bit-wide mode signal - hardcoded to "11" - it means that what is being transferred is data
@@ -55,6 +60,9 @@ class DAC(spi2.SPI2):
 
         init_latch = Signal()       # when asserted, //self.initialized// pin is driven high and lets the controller know that DAC has been already initialized
 
+
+        clipHIGH = [Signal() for i in range(params.channels)]
+        clipLOW = [Signal() for i in range(params.channels)]
 
         ###
 
@@ -148,6 +156,16 @@ class DAC(spi2.SPI2):
         for ch in range (params.channels):
             self.comb += [
                 address[ch][:3].eq(ch), address[ch][3:].eq(group),
-                data[ch].eq(Cat(0, 0, self.profile[ch][50:])),
+                # data[ch].eq(Cat(0, 0, self.profile[ch][50:])),
+                # clipHIGH[ch].eq(self.profile[ch][48:] == 0x1FFF),
+                # clipLOW[ch].eq(self.profile[ch][48:] == 0x2000),
+                # If(clipLOW[ch],
+                #     temp[ch].eq(0x0000)
+                # ).Elif(clipHIGH[ch],
+                #     temp[ch].eq(0xFFFF)
+                # ).Else(
+                temp[ch].eq((self.profile[ch][48:]) + 0x8000),        
+                # ),
+                data[ch].eq((temp[ch])),
                 dataOut[ch].eq(Cat(data[ch], address[ch], mode))            
                 ]

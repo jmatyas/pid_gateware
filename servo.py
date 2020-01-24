@@ -13,7 +13,7 @@ A_NORM = 1 << COEFF_SHIFT
 COEFF_width = 18
 COEFF_MAX = 1 << COEFF_width - 1
 
-start_delay = 4
+start_delay = 100
 
 
 class Servo(Module):
@@ -56,11 +56,11 @@ class Servo(Module):
         # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch)*dac_p.channels)
         # print(t_cycle)
 
-        # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch * dac_p.channels))
-        if (4313 - (t_adc + t_iir + t_dac) < 0):
-            self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac)
-        else:
-            self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac))
+        # # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch * dac_p.channels))
+        # if (4313 - (t_adc + t_iir + t_dac) < 0):
+        self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 5000)
+        # else:
+        #     self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac))
 
         print(t_adc, t_iir, t_dac_1ch, t_dac_1ch*dac_p.channels, t_cycle, 4313 - (t_adc + t_iir + t_dac))
         T_CYCLE = self.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
@@ -68,7 +68,8 @@ class Servo(Module):
         self.start = Signal()
         self.done = Signal()
 
-        t_restart = t_cycle - t_adc - t_iir - t_dac + 1
+        # t_restart = t_cycle - t_adc - t_iir - t_dac + 1
+        t_restart = t_cycle - t_adc + 1
         print(t_restart)
         cnt = Signal(max = t_restart)
         cnt_done = Signal()
@@ -96,8 +97,8 @@ class Servo(Module):
         ]
         
 
-        assert start_delay <= 50 - 3
-        start_cnt = Signal(max=50 + 1, reset = start_delay + 3)
+        assert start_delay <= 100
+        start_cnt = Signal(max=start_delay + 1, reset = start_delay)
         start_done = Signal()
 
         self.comb += [
@@ -147,7 +148,7 @@ class Servo(Module):
             ch = ix
             adc = ix
             a1, b0, b1 = coeff_list[ix]
-            coeff = dict(pow=0x0000, offset=0x8000, ftw0=0x1727, ftw1=0x1929,
+            coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
                 a1=a1, b0=b0, b1=b1, cfg = adc | (0 << 3))
 
             for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
@@ -155,11 +156,14 @@ class Servo(Module):
                 self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
                 # print(k, word, addr, mask, coeff[k], ix*8, i)
 
-
-            self.comb +=[
+            self.comb += [
                 If(~self.iir.loading,
                     self.iir.adc[ch].eq(adc)                     # assinging adc number to iir and in result to dac channel
                 ),
+
+            ]
+
+            self.sync +=[
                 self.iir.ctrl[ch].en_iir.eq(1),
                 self.iir.ctrl[ch].en_out.eq(1),
                 self.iir.ctrl[ch].profile.eq(profile),

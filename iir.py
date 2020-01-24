@@ -4,6 +4,8 @@ import logging
 from migen import *
 
 
+debug = {("mark_debug", "true")}
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,18 +45,18 @@ class DSP(Module):
         # offset-state difference does not overflow the width of the ad factor
         # which is also w.state.
         self.offset = Signal((w.state, True))
-        self.coeff = Signal((w.coeff, True))
-        self.output = Signal((w.state, True))
+        self.coeff = Signal((w.coeff, True), name_override="iir_coef", attr=debug)
+        self.output = Signal((w.state, True), name_override="iir_out", attr=debug)
         self.accu_clr = Signal()
         self.offset_load = Signal()
-        self.clip = Signal()
+        self.clip = Signal(name_override="iir_clip", attr=debug)
 
-        a = Signal((w.state, True), reset_less=True)
+        self.a = a = Signal((w.state, True), reset_less=True, name_override="iir_a", attr=debug)
         d = Signal((w.state, True), reset_less=True)
         ad = Signal((w.state, True), reset_less=True)
         b = Signal((w.coeff, True), reset_less=True)
         m = Signal((w.accu, True), reset_less=True)
-        p = Signal((w.accu, True), reset_less=True)
+        self.p = p = Signal((w.accu, True), reset_less=True, name_override="iir_p", attr=debug)
 
         self.sync += [
                 a.eq(self.state),
@@ -242,7 +244,7 @@ class IIR(Module):
             ("stb", 1)])
             for i in range(1 << w.channel)]
         # only update during ~loading
-        self.adc = [Signal((w.adc, True), reset_less=True)
+        self.adc = [Signal((w.adc, True), reset_less=True, name_override = "adc{}".format(i), attr=debug)
                 for i in range(1 << w.channel)]
         # Cat(ftw0, ftw1, pow, asf)
         # only read during ~processing
@@ -429,9 +431,10 @@ class IIR(Module):
         m_state = self.m_state.get_port(write_capable=True)  # mode=READ_FIRST
         self.specials += m_state, m_coeff
 
-        dsp = DSP(w)
+        dsp = DSP(w, True)
         self.submodules += dsp
 
+        self.p = dsp.p
         offset_clr = Signal()
 
         self.comb += [
@@ -538,7 +541,7 @@ class IIR(Module):
                         ),
                         If(stage[2],
                             ddss[channel[2]][3*w.word:].eq(
-                                m_state.dat_r[w.state - w.asf - 1:w.state - 1])
+                                m_state.dat_r[w.state - w.asf:w.state])
                         )
                     ],
                     2: [
