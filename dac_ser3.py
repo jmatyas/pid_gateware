@@ -1,20 +1,12 @@
 from migen import *
-
 from collections import namedtuple
 
 from . import spi2
 
 DACParams = spi2.SPIParams
 
-debug = {("mark_debug", "true")}
-
-
-# values needed for DAC's initialization
-AD53XX_SPECIAL_OFS0 = 2 << 16
-AD53XX_SPECIAL_OFS1 = 3 << 16
-ZOTINO_OFFSET = 8192
-AD53XX_CMD_SPECIAL = 0 << 22
-# INIT_VAL = ((AD53XX_CMD_SPECIAL | AD53XX_SPECIAL_OFS0 | (0x2000 & 0x3FFF)) << 8)
+# value needed for DAC's initialization - it sets the DAC constant offset value to the certain level
+# to achieve the widest output voltage range
 INIT_VAL = 0x22000
 
 class DAC(spi2.SPI2):
@@ -26,22 +18,22 @@ class DAC(spi2.SPI2):
         # transmission to one channel - there are 3 cycles of delay needed by IC - it allows the SYNCR pin to be high for at least 
         # 4 clock cycles - 4*8ns = 32 ns
 
-        self.profile =[Signal(32 + 16 + 16, reset_less=True, name_override="profile{}".format(i), attr=debug)    # 64 bit wide data delivered to dac
+        self.profile =[Signal(32 + 16 + 16, reset_less=True)    # 64 bit wide data delivered to dac
             for i in range(params.channels)]
 
         self.dac_ready = Signal()           # output signal - it lets the controller know that it's transmitted all the data
-        self.dac_start = Signal()
-        self.dac_init = Signal()
+        self.dac_start = Signal()           # input signal - when driven high, the module's operation is started
+        self.dac_init = Signal()            # input signal - when driven high, the module performs the DAC's integrated circuit initailization
 
         self.initialized = Signal()
 
         temp = [Signal(16) for i in range (params.channels)]
-        data = [Signal(16, name_override="data_dac_{}".format(i), attr=debug) 
-            for i in range(params.channels)]        # 16-bit-wide data to be transferred to DAC (ASF from profile + "00")
+        data = [Signal(16) 
+            for i in range(params.channels)]        # 16-bit-wide data to be transferred to DAC
 
         mode = Signal (2)           # 2-bit-wide mode signal - hardcoded to "11" - it means that what is being transferred is data
         group = Signal(3)           # hardcoded group to which data is being transferred - in this case "001" which means group 0
-        channel =  Signal(3)        # channel number where the data is being trasnferred to (regular number fro 0 to 7 in binary)
+        channel =  Signal(3)        # channel number where the data is being trasnferred to (regular number from 0 to 7 in binary)
         address = [Signal(6) for ch in range(params.channels)]
         dataOut = [Signal(2+6+16) for i in range(params.channels)]      # data width + group width + channel width + mode width
 
@@ -59,10 +51,6 @@ class DAC(spi2.SPI2):
         cycle_load = Signal.like(cycle_cnt)
 
         init_latch = Signal()       # when asserted, //self.initialized// pin is driven high and lets the controller know that DAC has been already initialized
-
-
-        clipHIGH = [Signal() for i in range(params.channels)]
-        clipLOW = [Signal() for i in range(params.channels)]
 
         ###
 
@@ -152,20 +140,13 @@ class DAC(spi2.SPI2):
 
         self.comb += mode.eq(3), group.eq(1)        # group and mode are hard-coded - only first group may be used and only data registers may be updated
         
-        # concatanation of latched data + group + channel + mode 
+        # concatanation of latched data + group + channel + mode;
+        # adding to 0x8000 to the received values, shifts them by the half of the signal width's 
+        # and converts the data from the two's comlement to the binary representation
         for ch in range (params.channels):
             self.comb += [
                 address[ch][:3].eq(ch), address[ch][3:].eq(group),
-                # data[ch].eq(Cat(0, 0, self.profile[ch][50:])),
-                # clipHIGH[ch].eq(self.profile[ch][48:] == 0x1FFF),
-                # clipLOW[ch].eq(self.profile[ch][48:] == 0x2000),
-                # If(clipLOW[ch],
-                #     temp[ch].eq(0x0000)
-                # ).Elif(clipHIGH[ch],
-                #     temp[ch].eq(0xFFFF)
-                # ).Else(
                 temp[ch].eq((self.profile[ch][48:]) + 0x8000),        
-                # ),
                 data[ch].eq((temp[ch])),
                 dataOut[ch].eq(Cat(data[ch], address[ch], mode))            
                 ]

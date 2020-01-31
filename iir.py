@@ -3,9 +3,6 @@ import logging
 
 from migen import *
 
-
-debug = {("mark_debug", "true")}
-
 logger = logging.getLogger(__name__)
 
 
@@ -45,18 +42,18 @@ class DSP(Module):
         # offset-state difference does not overflow the width of the ad factor
         # which is also w.state.
         self.offset = Signal((w.state, True))
-        self.coeff = Signal((w.coeff, True), name_override="iir_coef", attr=debug)
-        self.output = Signal((w.state, True), name_override="iir_out", attr=debug)
+        self.coeff = Signal((w.coeff, True))
+        self.output = Signal((w.state, True))
         self.accu_clr = Signal()
         self.offset_load = Signal()
-        self.clip = Signal(name_override="iir_clip", attr=debug)
+        self.clip = Signal()
 
-        self.a = a = Signal((w.state, True), reset_less=True, name_override="iir_a", attr=debug)
+        a = Signal((w.state, True), reset_less=True)
         d = Signal((w.state, True), reset_less=True)
         ad = Signal((w.state, True), reset_less=True)
         b = Signal((w.coeff, True), reset_less=True)
         m = Signal((w.accu, True), reset_less=True)
-        self.p = p = Signal((w.accu, True), reset_less=True, name_override="iir_p", attr=debug)
+        p = Signal((w.accu, True), reset_less=True)
 
         self.sync += [
                 a.eq(self.state),
@@ -244,7 +241,7 @@ class IIR(Module):
             ("stb", 1)])
             for i in range(1 << w.channel)]
         # only update during ~loading
-        self.adc = [Signal((w.adc, True), reset_less=True, name_override = "adc{}".format(i), attr=debug)
+        self.adc = [Signal((w.adc, True), reset_less=True)
                 for i in range(1 << w.channel)]
         # Cat(ftw0, ftw1, pow, asf)
         # only read during ~processing
@@ -295,7 +292,9 @@ class IIR(Module):
         state_clr = Signal()
         stage_en = Signal()
         
-
+        # first four states are used to write the data coefficients received in the module's
+        # constructor to the memory; this can be perfomed only once, at the beginning of the 
+        # FPGA operation
         fsm.act("IDLE",
                 # self.done.eq(1),
                 state_clr.eq(1),
@@ -353,6 +352,8 @@ class IIR(Module):
                 )
         )
 
+        # assinging addrs values to the memory's addresses
+        # when in writing state, write the value to the memory
         self.comb += [
             If(self.reading, 
                 mem.adr.eq(addrs[coeff_no])
@@ -362,13 +363,12 @@ class IIR(Module):
             ),
         ]
 
+        # extracting information from the read data;
         self.sync += [
             If(self.reading,
                 val[coeff_no].eq(mem.dat_r)
             ),
-            # If(~self.writing,
-            #     mem.we.eq(0)
-            # ),
+            # the below allows writing to the memory's fields values not overwriting the second half of the field;
             If(self.calculating,
                 If(words[coeff_no],
                     val[coeff_no].eq((val[coeff_no] & masks[coeff_no]) | ((values[coeff_no] & masks[coeff_no]) << w.coeff))
@@ -376,6 +376,8 @@ class IIR(Module):
                     val[coeff_no].eq((values[coeff_no] & masks[coeff_no]) | (val[coeff_no] & (masks[coeff_no] << w.coeff)))
                 )
             ),
+            # iterating over coefficients list and if there are no coefficients left, set the //self.done_writing//
+            # signal, which lets the module's controller know, the writing coefficients into the FPGA memory has been finished
             If(fsm.ongoing("WRITE"),
                 If( not (coeff_no == len(addrs) - 1),
                     coeff_no.eq(coeff_no+1)
@@ -431,10 +433,9 @@ class IIR(Module):
         m_state = self.m_state.get_port(write_capable=True)  # mode=READ_FIRST
         self.specials += m_state, m_coeff
 
-        dsp = DSP(w, True)
+        dsp = DSP(w, True)          # added //True// to the DSP's constructor. It makes the module to output signed data
         self.submodules += dsp
 
-        self.p = dsp.p
         offset_clr = Signal()
 
         self.comb += [

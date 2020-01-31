@@ -91,7 +91,6 @@ class SPI2(Module):
                         bits.eq(params.data_width-1),
                     ).Else(
                         bits.eq(bits - 1),
-                        # sr_data[1:].eq(sr_data),
                         # sr_data.eq(Cat(sr_data[1:], 0))         # LSB first
                         sr_data.eq(Cat(0, sr_data[:-1])),         # MSB first
                     )

@@ -58,7 +58,9 @@ class PGIA(Module):
         self.submodules.fsm = fsm = CEInserter()(FSM("IDLE"))
         self.comb += fsm.ce.eq(clk_cnt_done)
 
-        self.comb += pads.sdi.eq(sr_data[0])        # LSB first
+        # self.comb += pads.sdi.eq(sr_data[0])        # LSB first
+        self.comb += pads.sdi.eq(sr_data[-1])        # MSB first
+
 
         fsm.act("IDLE",
             self.ready.eq(1),
@@ -88,13 +90,14 @@ class PGIA(Module):
 
         fsm.act("RCLK",
             pads.rclk.eq(1),
+            pads.srclk.eq(1),
             NextState("END")
         )
 
         # PGIA is needed only once during servo operation - to initalize the PGIA registers with 
         # given values, it is therefore allowed to not being able to use this module again
         fsm.act("END",
-            pads.rclk.eq(1),
+            # pads.rclk.eq(1),
             self.initialized.eq(1)
         )
 
@@ -105,7 +108,9 @@ class PGIA(Module):
                 ),
                 If(fsm.before_leaving("HOLD"),
                     bits_left.eq(bits_left - 1),
-                    sr_data.eq(Cat(sr_data[1:], 0))
+                    # sr_data.eq(Cat(sr_data[1:], 0)),     #LSB
+                    sr_data.eq(Cat(0, sr_data[:-1]))        #MSB
+
                 ),
                 If(data_load,
                     sr_data.eq(data)

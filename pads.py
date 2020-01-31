@@ -58,7 +58,7 @@ class SamplerPads(Module):
                 "set_input_delay -clock {clk} -min -0.5 [get_ports {port}]",
                 clk=dp.clkout, port=sdop)
 
-class pgiaPads(Module):
+class PGIAPads(Module):
     def __init__(self, platform, eem):
         self.sdi = Signal()
         self.srclk = Signal()

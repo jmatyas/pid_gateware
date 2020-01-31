@@ -7,12 +7,14 @@ from artiq.gateware.szservo.pgia_ser import PGIA, PGIAParams
 from artiq.language.units import us, ns
 
 
-COEFF_SHIFT = 11
-B_NORM = 1 << COEFF_SHIFT + 1
-A_NORM = 1 << COEFF_SHIFT
-COEFF_width = 18
-COEFF_MAX = 1 << COEFF_width - 1
+# coefficients width and normalization factors
+COEFF_SHIFT = 11                # the number of bits that the calculated by IIR output has to be shifted
+B_NORM = 1 << COEFF_SHIFT + 1   # the input values' coefficient normalization factor
+A_NORM = 1 << COEFF_SHIFT       # the filter's a0 value
+COEFF_width = 18                # each coefficient's width
+COEFF_MAX = 1 << COEFF_width - 1    # coefficient's maximum value before the filter's registers overflow due to the calcualtions
 
+# delay needed before the Servo starts its operation - it allows the FPGA setting its signals' initial values
 start_delay = 100
 
 
@@ -20,6 +22,7 @@ class Servo(Module):
     def __init__(self, adc_pads, pgia_pads, dac_pads, adc_p, pgia_p, iir_p, dac_p, pgia_init_val, Kps, Kis):
         self.clock_domains.cd_sys = ClockDomain()
         
+        # the arrays of signals needed for writing the controller's coefficients into the FPGA's memory
         length = adc_p.channels*8
         addrs = Array(Signal(max = 4 << iir_p.profile + iir_p.channel) for i in range(length))
         values = Array(Signal(iir_p.coeff) for i in range(length))
@@ -40,37 +43,24 @@ class Servo(Module):
             self.comb += j.eq(i), l.eq(k)
 
 
+        # calculating each submodule's operation time needed for defining the sampling period and restarting
+        # Sampler's transmission
         t_adc = (adc_p.t_cnvh + adc_p.t_conv + adc_p.t_rtt +
             adc_p.channels*adc_p.width//adc_p.lanes) + 1
         t_iir = ((1 + 4 + 1) << iir_p.channel) + 1
-
         t_dac_1ch = (dac_p.data_width*2*dac_p.clk_width + 3 + 1)
         
         # 8ns - 1 clock cycle, DAC needs about 34.5 us to settle, hence 34.5us/8ns = number of cycles
         t_dac = t_dac_1ch * dac_p.channels + 1 
-        # t_dac = ((dac_p.data_width*2*dac_p.clk_width + 6 + 2 )*dac_p.channels + 1 + 4313) 
+        t_update = 4256
 
-
-# ROZKMINIC TO - ILE CZASU!!!!
-        # print(t_adc, t_iir, t_dac, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch)*dac_p.channels)
-        # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch)*dac_p.channels)
-        # print(t_cycle)
-
-        # # self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac_1ch * dac_p.channels))
-        # if (4313 - (t_adc + t_iir + t_dac) < 0):
-        self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 5000)
-        # else:
-        #     self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac + 4313 - (t_adc + t_iir + t_dac))
-
-        print(t_adc, t_iir, t_dac_1ch, t_dac_1ch*dac_p.channels, t_cycle, 4313 - (t_adc + t_iir + t_dac))
+        self.t_cycle = t_cycle = max(t_adc, t_iir, t_dac, 4256)
         T_CYCLE = self.t_cycle*8*ns  # Must match gateware Servo.t_cycle.
 
         self.start = Signal()
         self.done = Signal()
 
-        # t_restart = t_cycle - t_adc - t_iir - t_dac + 1
-        t_restart = t_cycle - t_adc + 1
-        print(t_restart)
+        t_restart = t_cycle - (t_adc + t_iir + t_dac_1ch) + 1
         cnt = Signal(max = t_restart)
         cnt_done = Signal()
         active = Signal(3)
@@ -96,7 +86,7 @@ class Servo(Module):
             )
         ]
         
-
+        # counting clock cycles to delay the begining of the module's operation
         assert start_delay <= 100
         start_cnt = Signal(max=start_delay + 1, reset = start_delay)
         start_done = Signal()
@@ -125,25 +115,19 @@ class Servo(Module):
             self.done.eq(self.dac.dac_ready)
         ]
 
-
-        # Kps = [1 for i in range(adc_p.channels)]
-        # Kis = [0 for i in range(adc_p.channels)]
-        # Kis = [0 for i in range(adc_p.channels)]
+        # list of coefficients for each controller's channel
         coeff_list = [[] for j in range(len(Kps))]
 
         assert len(coeff_list) == adc_p.channels
 
+        # conversion of coefficients
         for idx, (i, j) in enumerate(zip (Kps, Kis)):
             coeff_list[idx] = coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
-            print(coeff_list[idx])
 
-
-        # # self.channel = channel = 1
-        # adc = 0
         profile = 0
-        # channel0 = 0
-        # channel1 = 1
 
+        # creating lists of coefficients and their placements in the IIR's memory that are passed to the IIR
+        # constructor.
         for ix in range(adc_p.channels):
             ch = ix
             adc = ix
@@ -154,68 +138,23 @@ class Servo(Module):
             for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
                 word, addr, mask = self.iir._coeff(ch, profile, coeff = k)
                 self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
-                # print(k, word, addr, mask, coeff[k], ix*8, i)
 
             self.comb += [
                 If(~self.iir.loading,
                     self.iir.adc[ch].eq(adc)                     # assinging adc number to iir and in result to dac channel
                 ),
-
             ]
-
+            # enabling IIR's output for every channel
             self.sync +=[
                 self.iir.ctrl[ch].en_iir.eq(1),
                 self.iir.ctrl[ch].en_out.eq(1),
                 self.iir.ctrl[ch].profile.eq(profile),
             ]
 
-# # --------------------------------------------
-# # ----------------to ponizej sie skompilowalo i dziala  w symualacji
-# # -------------------------------------------
-#  # # self.channel = channel = 1
-#         adc0 = 0
-#         adc1 = 1
-#         profile = 0
-#         channel0 = 0
-#         channel1 = 1
 
-#         # for ix in range(adc_p.channels):
-#         # ch = ix
-#         # adc = ix
-#         coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
-#             a1=a1, b0=b0, b1=b1, cfg = adc0 | (0 << 3))
-
-#         for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
-#             word, addr, mask = self.iir._coeff(channel0, profile, coeff = k)
-#             # self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
-#             self.comb += addrs[i].eq(addr), words[i].eq(word), masks[i].eq(mask), values[i].eq(coeff[k])
-            
-#             # print(k, word, addr, mask, coeff[k], ix*8, i)
-
-#         coeff = dict(pow=0x0000, offset=0x0000, ftw0=0x1727, ftw1=0x1929,
-#             a1=a1, b0=b0, b1=b1, cfg = adc1 | (0 << 3))
-
-#         for i,k in enumerate("ftw1 pow offset ftw0 b1 cfg a1 b0".split()):
-#             word, addr, mask = self.iir._coeff(channel1, profile, coeff = k)
-#             # self.comb += addrs[i + ix*8].eq(addr), words[i + ix*8].eq(word), masks[i + ix*8].eq(mask), values[i + ix*8].eq(coeff[k])
-#             self.comb += addrs[i+8].eq(addr), words[i+8].eq(word), masks[i+8].eq(mask), values[i+8].eq(coeff[k])
-
-#         self.comb +=[
-#             If(~self.iir.loading,
-#                 self.iir.adc[channel0].eq(adc0),                     # assinging adc number to iir and in result to dac channel
-#                 self.iir.adc[channel1].eq(adc1),
-#             ),
-#             self.iir.ctrl[channel0].en_iir.eq(1),
-#             self.iir.ctrl[channel0].en_out.eq(1),
-#             self.iir.ctrl[channel0].profile.eq(profile),
-            
-#             self.iir.ctrl[channel1].en_iir.eq(1),
-#             self.iir.ctrl[channel1].en_out.eq(1),
-#             self.iir.ctrl[channel1].profile.eq(profile),
-
-#         ]
-
-
+# function that converts the coefficients from the continuous-frequency domain to the 
+# discrete Z domain; T_CYCLE is the controller's sampling period that needs to match the 
+# calculated t_cycle in the Servo module.
 def coeff_to_mu(Kp, Ki, T_CYCLE):
     Kp *=B_NORM
     if Ki == 0:
@@ -228,41 +167,13 @@ def coeff_to_mu(Kp, Ki, T_CYCLE):
         Ki *= B_NORM*T_CYCLE/2.
         c = 1.
         a1 = A_NORM
-        b0 = int(round(Kp + Ki*c))
+        b0 = int(round(2.*Kp + Ki*c))
         b1 = int(round(Ki - 2.*Kp))
         if b1 == -b0:
-            raise ValueError("low integrator gain and/or gain limit")
+            raise ValueError("low integrator gain and")
 
     if (b0 >= COEFF_MAX or b0 < -COEFF_MAX or
             b1 >= COEFF_MAX or b1 < -COEFF_MAX):
         raise ValueError("high gains")
     
     return [a1, b0, b1]
-
-
-if __name__ == "__main__":
-    T_CYCLE = 1000*8*ns  # Must match gateware Servo.t_cycle.
-
-
-    Kps = [1 for i in range(8)]
-    Kis = [0 for i in range(8)]
-    # Kis = [0 for i in range(adc_p.channels)]
-    coeff_list = [[] for j in range(len(Kps))]
-
-    # assert len(coeff_list) == adc_p.channels
-
-    for idx, (i, j) in enumerate(zip (Kps, Kis)):
-        coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j, T_CYCLE = T_CYCLE)
-        
-
-
-    # Kps = [1, 2, 3]
-    # Kis = [6, 7, 8]
-    # coeff_list = [[] for j in range(len(Kps))]
-    # for idx, (i, j) in enumerate(zip (Kps, Kis)):
-    #     coeff_list[idx]= coeff_to_mu(Kp = i, Ki = j)
-    
-    # a1, b0, b1 = coeff_list[1]
-
-    
-    # print(a1, b0, b1)
