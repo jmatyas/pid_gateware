@@ -1,7 +1,7 @@
 from migen import *
 from collections import namedtuple
 
-from artiq.gateware.szservo.spi import SPIParams
+from artiq.gateware.szservo.spi2 import SPIParams
 
 PGIAParams = namedtuple("PGIAParams", [
     "data_width",   # width of one portion of data to be transferred
